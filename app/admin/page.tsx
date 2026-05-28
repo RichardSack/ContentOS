@@ -14,23 +14,26 @@ export default function AdminPage() {
     const saved = localStorage.getItem("cos_admin_secret");
     if (saved) setIsLoggedIn(true);
 
-    getSupabaseClient()
-      .from("platforms")
-      .select("id, name")
-      .eq("is_active", true)
-      .then(({ data }) => {
+    async function loadPlatforms() {
+      try {
+        const { data } = await getSupabaseClient()
+          .from("platforms")
+          .select("id, name")
+          .eq("is_active", true);
+
         if (data) {
           const typed = data as { id: string; name: string }[];
           setPlatforms(typed);
           setSelectedPlatforms(typed.map((p) => p.id));
         }
-      })
-      .catch(() => {
-        // Fallback when Supabase env vars are not configured yet
+      } catch {
         const fallback = [{ id: "tiktok", name: "TikTok" }];
         setPlatforms(fallback);
         setSelectedPlatforms(fallback.map((p) => p.id));
-      });
+      }
+    }
+
+    loadPlatforms();
   }, []);
 
   function login() {
