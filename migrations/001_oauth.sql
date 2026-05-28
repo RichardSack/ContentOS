@@ -2,6 +2,17 @@
 -- Admin accounts have user_id = NULL (current behavior)
 -- Future: each user gets their own platform_accounts rows with user_id set
 
+-- Defensive: ensure set_updated_at() exists in case this runs standalone
+create or replace function set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 alter table platform_accounts
   add column if not exists user_id uuid,
   add column if not exists connected_at timestamptz not null default now();
@@ -21,8 +32,7 @@ create table if not exists oauth_states (
 );
 
 create index if not exists idx_oauth_states_expires
-on oauth_states (expires_at)
-where expires_at < now();
+on oauth_states (expires_at);
 
 create index if not exists idx_oauth_states_lookup
 on oauth_states (platform_id, state);

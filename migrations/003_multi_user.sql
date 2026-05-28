@@ -11,6 +11,17 @@
 -- New code always writes user_id. Old rows without user_id are treated as
 -- unowned / admin-imported and only visible to admin.
 
+-- Defensive: ensure set_updated_at() exists in case this runs standalone
+create or replace function set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 -- ============================================================
 -- 1. User profile table (extends Supabase Auth)
 -- ============================================================

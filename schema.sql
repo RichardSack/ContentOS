@@ -1,6 +1,17 @@
 create extension if not exists vector;
 create extension if not exists pgcrypto;
 
+-- Trigger helper: auto-sets updated_at on row update
+create or replace function set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 create table if not exists content_items (
   id uuid primary key default gen_random_uuid(),
   content_type text not null default 'short_video',
