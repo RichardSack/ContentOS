@@ -3,8 +3,15 @@
 import { useState, useEffect } from "react";
 import { getSupabaseClient } from "@/lib/supabase/client";
 
-export default function AdminPage() {
-  const [secret, setSecret] = useState("");
+interface DashboardStats {
+  processing: any[];
+  failed: any[];
+  jobs: any[];
+  accounts: any[];
+  scheduled: any[];
+}
+
+export default function AdminPage() {  const [secret, setSecret] = useState("");
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [message, setMessage] = useState("");
   const [platforms, setPlatforms] = useState<{ id: string; name: string }[]>([]);
@@ -18,6 +25,7 @@ export default function AdminPage() {
       connected_at: string;
     }[]
   >([]);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("cos_admin_secret");
@@ -78,7 +86,23 @@ export default function AdminPage() {
       }
     }
 
+    async function loadStats() {
+      try {
+        const adminSecret = localStorage.getItem("cos_admin_secret") || "";
+        const res = await fetch("/api/admin/stats", {
+          headers: { Authorization: `Bearer ${adminSecret}` },
+        });
+        if (res.ok) {
+          const json = await res.json();
+          setStats(json);
+        }
+      } catch {
+        // ignore silently
+      }
+    }
+
     loadAccounts();
+    loadStats();
 
     // Check URL for OAuth callback result
     const params = new URLSearchParams(window.location.search);
@@ -279,6 +303,47 @@ export default function AdminPage() {
           })}
         </div>
       </section>
+
+      {/* Dashboard Stats */}
+      {stats && (
+        <section className="mb-8 space-y-4">
+          <h2 className="text-lg font-semibold">Dashboard</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-surface-700 border border-surface-500 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold">{stats.processing.length}</div>
+              <div className="text-xs text-gray-400">In Bearbeitung</div>
+            </div>
+            <div className="bg-surface-700 border border-surface-500 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold">{stats.failed.length}</div>
+              <div className="text-xs text-gray-400">Fehlgeschlagen</div>
+            </div>
+            <div className="bg-surface-700 border border-surface-500 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold">{stats.accounts.length}</div>
+              <div className="text-xs text-gray-400">Verbunden</div>
+            </div>
+            <div className="bg-surface-700 border border-surface-500 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold">{stats.scheduled.length}</div>
+              <div className="text-xs text-gray-400">Geplant</div>
+            </div>
+          </div>
+
+          {stats.jobs.length > 0 && (
+            <div className="bg-surface-700 border border-surface-500 rounded-lg p-4">
+              <h3 className="text-sm font-semibold mb-2">Offene / Fehlgeschlagene Jobs</h3>
+              <ul className="space-y-1 text-sm">
+                {stats.jobs.slice(0, 5).map((job: any) => (
+                  <li key={job.id} className="flex justify-between">
+                    <span>{job.job_type}</span>
+                    <span className={`text-xs ${job.status === "failed" ? "text-red-400" : "text-yellow-400"}`}>
+                      {job.status} {job.attempts > 0 && `(${job.attempts})`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
         <div>
