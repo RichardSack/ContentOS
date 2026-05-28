@@ -17,7 +17,8 @@ export async function POST(req: NextRequest) {
   const description = String(formData.get("description") || "");
   const caption = String(formData.get("caption") || "");
   const scheduledAtRaw = String(formData.get("scheduledAt") || "");
-  const platformId = String(formData.get("platformId") || "tiktok");
+  const platformIdsRaw = formData.getAll("platformId") as string[];
+  const platformIds = platformIdsRaw.length > 0 ? platformIdsRaw : ["tiktok"];
 
   if (!file) {
     return NextResponse.json({ error: "Missing file" }, { status: 400 });
@@ -42,16 +43,19 @@ export async function POST(req: NextRequest) {
     scheduledAt = d.toISOString();
   }
 
-  const { data: platform, error: platformError } = await supabaseAdmin
+  const { data: validPlatforms, error: platformError } = await supabaseAdmin
     .from("platforms")
     .select("id")
-    .eq("id", platformId)
-    .eq("is_active", true)
-    .single();
+    .in("id", platformIds)
+    .eq("is_active", true);
 
-  if (platformError || !platform) {
+  if (
+    platformError ||
+    !validPlatforms ||
+    validPlatforms.length !== platformIds.length
+  ) {
     return NextResponse.json(
-      { error: "Invalid or inactive platform" },
+      { error: "Invalid or inactive platform selection" },
       { status: 400 }
     );
   }
@@ -104,27 +108,31 @@ export async function POST(req: NextRequest) {
   if (tempError)
     return NextResponse.json({ error: tempError.message }, { status: 500 });
 
+  const posts = [];
   const postStatus = scheduledAt ? "scheduled" : "draft";
 
-  const { data: post, error: postError } = await supabaseAdmin
-    .from("platform_posts")
-    .insert({
-      content_item_id: item.id,
-      platform_id: platformId,
-      title,
-      caption,
-      post_status: postStatus,
-      scheduled_at: scheduledAt,
-    })
-    .select("*")
-    .single();
+  for (const pid of platformIds) {
+    const { data: post, error: postError } = await supabaseAdmin
+      .from("platform_posts")
+      .insert({
+        content_item_id: item.id,
+        platform_id: pid,
+        title,
+        caption,
+        post_status: postStatus,
+        scheduled_at: scheduledAt,
+      })
+      .select("*")
+      .single();
 
-  if (postError)
-    return NextResponse.json({ error: postError.message }, { status: 500 });
+    if (postError)
+      return NextResponse.json({ error: postError.message }, { status: 500 });
+
+    posts.push(post);
+  }
 
   await enqueueJob({
     contentItemId: item.id,
-    platformPostId: post.id,
     temporaryUploadId: upload.id,
     jobType: "transcribe",
     priority: 30,
@@ -133,6 +141,6 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     contentItem: item,
     temporaryUpload: upload,
-    platformPost: post,
+    platformPosts: posts,
   });
 }

@@ -253,22 +253,53 @@ async function handlePublishToPlatform(job: any) {
     })
     .eq("id", post.id);
 
-  await enqueueJob({
-    contentItemId: job.content_item_id,
-    temporaryUploadId: job.temporary_upload_id,
-    jobType: "cleanup_temp_upload",
-    priority: 200,
-  });
+  // Multi-platform safety: only enqueue cleanup when ALL platform_posts for
+  // this content item are finished (published / failed / cancelled).
+  const { data: siblingPosts } = await supabaseAdmin
+    .from("platform_posts")
+    .select("post_status")
+    .eq("content_item_id", job.content_item_id);
+
+  const allFinished = (siblingPosts || []).every((p: any) =>
+    ["published", "failed", "cancelled"].includes(p.post_status)
+  );
+
+  if (allFinished) {
+    await enqueueJob({
+      contentItemId: job.content_item_id,
+      temporaryUploadId: job.temporary_upload_id,
+      jobType: "cleanup_temp_upload",
+      priority: 200,
+    });
+  }
 }
 
 async function handleCleanupTempUpload(job: any) {
-  const { upload } = await getSignedTempUrl(job.temporary_upload_id);
+  const { data: upload, error: uploadError } = await supabaseAdmin
+    .from("temporary_uploads")
+    .select("*")
+    .eq("id", job.temporary_upload_id)
+    .single();
 
-  const { error } = await supabaseAdmin.storage
+  if (uploadError) throw uploadError;
+  if (!upload) throw new Error("Upload not found");
+
+  if (upload.status === "deleted") {
+    // Idempotent: already cleaned up by a sibling platform post
+    return;
+  }
+
+  const { error: removeError } = await supabaseAdmin.storage
     .from(upload.storage_bucket)
     .remove([upload.storage_path]);
 
-  if (error) throw error;
+  if (removeError) {
+    // Tolerate "not found" — file may have been removed already
+    console.warn(
+      "Cleanup: storage remove returned error:",
+      removeError.message
+    );
+  }
 
   await supabaseAdmin
     .from("temporary_uploads")

@@ -1,15 +1,29 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { supabaseClient } from "@/lib/supabase/client";
 
 export default function AdminPage() {
   const [secret, setSecret] = useState("");
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [message, setMessage] = useState("");
+  const [platforms, setPlatforms] = useState<{ id: string; name: string }[]>([]);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
 
   useEffect(() => {
     const saved = localStorage.getItem("cos_admin_secret");
     if (saved) setIsLoggedIn(true);
+
+    supabaseClient
+      .from("platforms")
+      .select("id, name")
+      .eq("is_active", true)
+      .then(({ data }) => {
+        if (data) {
+          setPlatforms(data);
+          setSelectedPlatforms(data.map((p) => p.id));
+        }
+      });
   }, []);
 
   function login() {
@@ -18,12 +32,32 @@ export default function AdminPage() {
     setSecret("");
   }
 
+  function togglePlatform(id: string) {
+    setSelectedPlatforms((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  }
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setMessage("");
 
+    if (selectedPlatforms.length === 0) {
+      setMessage("Bitte mindestens eine Plattform auswählen.");
+      return;
+    }
+
     const form = e.currentTarget;
     const formData = new FormData(form);
+
+    // ensure only selected platforms are sent (in case checked state drifted)
+    const checked = form.querySelectorAll<HTMLInputElement>(
+      'input[name="platformId"]:checked'
+    );
+    if (checked.length === 0) {
+      setMessage("Bitte mindestens eine Plattform auswählen.");
+      return;
+    }
 
     const adminSecret = localStorage.getItem("cos_admin_secret") || "";
 
@@ -41,6 +75,7 @@ export default function AdminPage() {
 
       setMessage("Upload erfolgreich! Verarbeitung läuft im Hintergrund.");
       form.reset();
+      setSelectedPlatforms(platforms.map((p) => p.id));
     } catch (err: any) {
       setMessage(`Fehler: ${err.message}`);
     }
@@ -129,14 +164,30 @@ export default function AdminPage() {
         </div>
 
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Plattform</label>
-          <select
-            name="platformId"
-            defaultValue="tiktok"
-            className="w-full bg-surface-700 border border-surface-500 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-surface-400"
-          >
-            <option value="tiktok">TikTok</option>
-          </select>
+          <label className="block text-sm text-gray-400 mb-2">Plattformen</label>
+          <div className="space-y-2">
+            {platforms.map((p) => (
+              <label
+                key={p.id}
+                className="flex items-center gap-2 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  name="platformId"
+                  value={p.id}
+                  checked={selectedPlatforms.includes(p.id)}
+                  onChange={() => togglePlatform(p.id)}
+                  className="accent-white w-4 h-4"
+                />
+                <span>{p.name}</span>
+              </label>
+            ))}
+          </div>
+          {selectedPlatforms.length === 0 && (
+            <p className="text-red-400 text-xs mt-1">
+              Mindestens eine Plattform erforderlich.
+            </p>
+          )}
         </div>
 
         <button
