@@ -24,6 +24,12 @@ export default function AdminPage() {
           setPlatforms(typed);
           setSelectedPlatforms(typed.map((p) => p.id));
         }
+      })
+      .catch(() => {
+        // Fallback when Supabase env vars are not configured yet
+        const fallback = [{ id: "tiktok", name: "TikTok" }];
+        setPlatforms(fallback);
+        setSelectedPlatforms(fallback.map((p) => p.id));
       });
   }, []);
 
