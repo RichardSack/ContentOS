@@ -1,33 +1,27 @@
 import type { PlatformAdapter } from "./types";
+import { getActivePlatformAccount } from "./account";
 
 const TIKTOK_API_BASE = "https://open.tiktokapis.com";
 
-/**
- * Refreshes the TikTok access token via OAuth2 refresh-token flow.
- * Logs a warning if the refresh_token rotates — in production this should
- * be persisted back to a secure store (e.g. DB / env mgmt).
- */
-async function refreshAccessToken(): Promise<string> {
+async function refreshAccessToken(refreshToken?: string | null): Promise<string> {
   const clientKey = process.env.TIKTOK_CLIENT_KEY;
   const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
-  const refreshToken = process.env.TIKTOK_REFRESH_TOKEN;
+  const token = refreshToken || process.env.TIKTOK_REFRESH_TOKEN;
 
-  if (!clientKey || !clientSecret || !refreshToken) {
+  if (!clientKey || !clientSecret || !token) {
     throw new Error(
-      "TikTok credentials missing. Set TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET and TIKTOK_REFRESH_TOKEN."
+      "TikTok credentials missing. Set TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET and TIKTOK_REFRESH_TOKEN (or store refresh_token in platform_accounts)."
     );
   }
 
   const res = await fetch(`${TIKTOK_API_BASE}/v2/oauth/token/`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       client_key: clientKey,
       client_secret: clientSecret,
       grant_type: "refresh_token",
-      refresh_token: refreshToken,
+      refresh_token: token,
     }),
   });
 
@@ -39,10 +33,9 @@ async function refreshAccessToken(): Promise<string> {
     );
   }
 
-  if (data.refresh_token && data.refresh_token !== refreshToken) {
-    // In production persist the new refresh_token to avoid invalidation
+  if (data.refresh_token && data.refresh_token !== token) {
     console.warn(
-      "TikTok refresh_token rotated. New token should be persisted:",
+      "TikTok refresh_token rotated. Update platform_accounts row with new token:",
       data.refresh_token
     );
   }
@@ -54,11 +47,16 @@ export const tiktokAdapter: PlatformAdapter = {
   platformId: "tiktok",
 
   async publish(input) {
-    const accessToken = await refreshAccessToken();
+    let accessToken: string;
 
-    // TikTok accepts a publicly accessible video URL.
-    // The signed Supabase URL is fine here, but must stay valid long enough
-    // for TikTok to fetch the file (signed URLs are 1h by default).
+    try {
+      const account = await getActivePlatformAccount("tiktok");
+      accessToken = await refreshAccessToken(account.refresh_token);
+    } catch {
+      // Fallback to env vars for backwards-compat until DB account is created
+      accessToken = await refreshAccessToken();
+    }
+
     const res = await fetch(`${TIKTOK_API_BASE}/v2/post/publish/video/init/`, {
       method: "POST",
       headers: {
@@ -88,17 +86,11 @@ export const tiktokAdapter: PlatformAdapter = {
 
     const publishId = data.data?.publish_id as string | undefined;
     if (!publishId) {
-      throw new Error(
-        "TikTok publish init succeeded but no publish_id was returned."
-      );
+      throw new Error("TikTok publish init succeeded but no publish_id was returned.");
     }
 
-    // TikTok returns a publish_id that references the publishing job.
-    // The final video URL is only available after processing completes.
-    // In a future iteration we could poll /v2/post/publish/video/status/.
     return {
       platformPostId: publishId,
-      platformUrl: undefined,
       rawResponse: data,
     };
   },

@@ -1,6 +1,7 @@
 export type PublishInput = {
   temporaryUploadUrl: string;
   title?: string;
+  description?: string;
   caption?: string;
   scheduledAt?: string;
   metadata?: Record<string, unknown>;

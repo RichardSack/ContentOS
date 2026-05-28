@@ -28,9 +28,9 @@ create table if not exists platforms (
 insert into platforms (id, name, supports_upload, supports_embed, supports_metrics, is_active)
 values
   ('tiktok', 'TikTok', true, true, true, true),
-  ('youtube', 'YouTube', true, true, true, false),
-  ('instagram', 'Instagram', true, true, true, false),
-  ('linkedin', 'LinkedIn', true, true, true, false)
+  ('youtube', 'YouTube', true, true, true, true),
+  ('instagram', 'Instagram', true, true, true, true),
+  ('linkedin', 'LinkedIn', true, true, true, true)
 on conflict (id) do nothing;
 
 create table if not exists temporary_uploads (
@@ -138,15 +138,29 @@ on content_embeddings
 using ivfflat (embedding vector_cosine_ops)
 with (lists = 100);
 
-create or replace function set_updated_at()
-returns trigger
-language plpgsql
-as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
-$$;
+create table if not exists platform_accounts (
+  id uuid primary key default gen_random_uuid(),
+  platform_id text not null references platforms(id),
+  account_name text,
+  access_token text not null,
+  refresh_token text,
+  token_expires_at timestamptz,
+  is_active boolean not null default true,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_platform_accounts_active
+on platform_accounts (platform_id, is_active)
+where is_active = true;
+
+create trigger set_platform_accounts_updated_at
+before update on platform_accounts
+for each row execute function set_updated_at();
+
+-- activate all platforms for admin selection
+update platforms set is_active = true where id in ('youtube', 'instagram', 'linkedin');
 
 create trigger set_content_items_updated_at
 before update on content_items
