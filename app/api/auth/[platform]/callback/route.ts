@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { validateState } from "@/lib/oauth/core";
 import { getOAuthConfig } from "@/lib/oauth/config";
 import { fetchWithTimeout } from "@/lib/fetch-timeout";
+import { fetchLinkedInOwnerUrn } from "@/lib/oauth/callback-post";
 
 export async function GET(
   req: NextRequest,
@@ -125,6 +126,22 @@ export async function GET(
       return NextResponse.redirect(
         new URL("/admin?error=persist_failed", baseUrl)
       );
+    }
+
+    // LinkedIn: auto-fetch owner URN and store in metadata
+    if (platform === "linkedin") {
+      try {
+        const urn = await fetchLinkedInOwnerUrn(accessToken);
+        if (urn) {
+          await supabaseAdmin
+            .from("platform_accounts")
+            .update({ metadata: { linkedin_owner_urn: urn } })
+            .eq("platform_id", "linkedin")
+            .is("user_id", null);
+        }
+      } catch (e) {
+        console.warn("LinkedIn URN fetch failed:", e);
+      }
     }
 
     return NextResponse.redirect(
