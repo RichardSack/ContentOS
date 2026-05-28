@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export async function POST(req: NextRequest) {
   const { email, password, displayName } = await req.json();
@@ -11,39 +11,49 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) {
-    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
-  }
-
-  const supabase = createClient(url, anonKey);
-
-  const { data, error } = await supabase.auth.signUp({
+  const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email,
     password,
-    options: {
-      data: { full_name: displayName || email.split("@")[0] },
-    },
+    email_confirm: true, // Auto-confirm, no email verification needed
+    user_metadata: { full_name: displayName || email.split("@")[0] },
   });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
-  // Session token returned immediately
+  // Auto-create public.users row (trigger should handle this, but be safe)
+  await supabaseAdmin.from("users").upsert({
+    id: data.user.id,
+    email: data.user.email || email,
+    role: "creator",
+    display_name: displayName || email.split("@")[0],
+  });
+
+  // Sign in immediately to get session tokens
+  const { data: signInData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (signInError) {
+    return NextResponse.json(
+      { error: signInError.message, note: "Account created but login failed" },
+      { status: 500 }
+    );
+  }
+
   return NextResponse.json({
     user: {
-      id: data.user?.id,
-      email: data.user?.email,
-      displayName:
-        (data.user?.user_metadata as any)?.full_name || displayName,
+      id: data.user.id,
+      email: data.user.email,
+      displayName: (data.user.user_metadata as any)?.full_name || displayName,
     },
-    session: data.session
+    session: signInData.session
       ? {
-          access_token: data.session.access_token,
-          refresh_token: data.session.refresh_token,
-          expires_at: data.session.expires_at,
+          access_token: signInData.session.access_token,
+          refresh_token: signInData.session.refresh_token,
+          expires_at: signInData.session.expires_at,
         }
       : null,
   });

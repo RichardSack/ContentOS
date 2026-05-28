@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export async function POST(req: NextRequest) {
   const { email, password } = await req.json();
@@ -11,15 +11,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) {
-    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
-  }
-
-  const supabase = createClient(url, anonKey);
-
-  const { data, error } = await supabase.auth.signInWithPassword({
+  const { data, error } = await supabaseAdmin.auth.signInWithPassword({
     email,
     password,
   });
