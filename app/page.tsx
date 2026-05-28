@@ -84,9 +84,14 @@ export default function Home() {
         <h1 className="text-4xl font-bold mb-2 text-center tracking-tight">
           ContentOS
         </h1>
-        <p className="text-gray-400 text-center mb-8">
+        <p className="text-gray-400 text-center mb-2">
           Semantische Suche über deine Content-Bibliothek
         </p>
+        <div className="text-center mb-6">
+          <a href="/login" className="text-xs text-gray-600 hover:text-gray-400 transition">
+            Creator Login →
+          </a>
+        </div>
 
         <form onSubmit={handleSearch} className="relative mb-8">
           <input

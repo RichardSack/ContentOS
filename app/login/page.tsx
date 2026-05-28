@@ -25,13 +25,14 @@ export default function LoginPage() {
           password,
           options: {
             data: { full_name: displayName || email.split("@")[0] },
+            emailRedirectTo: `${window.location.origin}/admin`,
           },
         });
         if (signUpError) throw signUpError;
         if (data.session) {
           router.push("/admin");
         } else {
-          setError("Bitte Email bestätigen, bevor du dich einloggst.");
+          setError("Registrierung erfolgreich. Bitte bestätige deine Email, falls aktiviert.");
         }
       } else {
         const { data, error: signInError } = await getSupabaseClient().auth.signInWithPassword({

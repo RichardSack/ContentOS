@@ -25,7 +25,7 @@ Schlanke, plattformagnostische Social-Content-Suchmaschine.
 
 ```bash
 npm install
-cp .env.example .env.local
+cp .env.local .env.local
 # .env.local mit echten Werten füllen (siehe Umgebungsvariaben)
 npm run dev
 ```
