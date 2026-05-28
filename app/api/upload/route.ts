@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase/admin";
 import { assertAdmin } from "@/lib/auth/admin";
-import { enqueueJob } from "@/lib/jobs/queue";
 import { validateUpload } from "@/lib/upload/validate";
+import { processUpload } from "@/lib/upload/service";
 
 export async function POST(req: NextRequest) {
   try {
@@ -45,104 +44,19 @@ export async function POST(req: NextRequest) {
     scheduledAt = d.toISOString();
   }
 
-  const { data: validPlatforms, error: platformError } = await supabaseAdmin
-    .from("platforms")
-    .select("id")
-    .in("id", platformIds)
-    .eq("is_active", true);
-
-  if (
-    platformError ||
-    !validPlatforms ||
-    validPlatforms.length !== platformIds.length
-  ) {
-    return NextResponse.json(
-      { error: "Invalid or inactive platform selection" },
-      { status: 400 }
-    );
-  }
-
-  const { data: item, error: itemError } = await supabaseAdmin
-    .from("content_items")
-    .insert({
+  try {
+    const result = await processUpload(file, {
       title,
       description,
-      processing_status: "uploaded",
-      content_type: "short_video",
-    })
-    .select("*")
-    .single();
-
-  if (itemError)
-    return NextResponse.json({ error: itemError.message }, { status: 500 });
-
-  const storagePath = `${item.id}/${crypto.randomUUID()}-${file.name}`;
-  const bytes = await file.arrayBuffer();
-
-  const { error: uploadError } = await supabaseAdmin.storage
-    .from("temp_uploads")
-    .upload(storagePath, bytes, {
-      contentType: file.type,
-      upsert: false,
+      caption,
+      scheduledAt,
+      platformIds,
     });
-
-  if (uploadError)
-    return NextResponse.json({ error: uploadError.message }, { status: 500 });
-
-  const expiresAt = scheduledAt
-    ? new Date(new Date(scheduledAt).getTime() + 24 * 60 * 60 * 1000).toISOString()
-    : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
-  const { data: upload, error: tempError } = await supabaseAdmin
-    .from("temporary_uploads")
-    .insert({
-      content_item_id: item.id,
-      storage_bucket: "temp_uploads",
-      storage_path: storagePath,
-      original_filename: file.name,
-      mime_type: file.type,
-      file_size_bytes: file.size,
-      expires_at: expiresAt,
-    })
-    .select("*")
-    .single();
-
-  if (tempError)
-    return NextResponse.json({ error: tempError.message }, { status: 500 });
-
-  const posts = [];
-  const postStatus = scheduledAt ? "scheduled" : "draft";
-
-  for (const pid of platformIds) {
-    const { data: post, error: postError } = await supabaseAdmin
-      .from("platform_posts")
-      .insert({
-        content_item_id: item.id,
-        platform_id: pid,
-        title,
-        caption,
-        post_status: postStatus,
-        scheduled_at: scheduledAt,
-      })
-      .select("*")
-      .single();
-
-    if (postError)
-      return NextResponse.json({ error: postError.message }, { status: 500 });
-
-    posts.push(post);
+    return NextResponse.json(result);
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err.message || "Upload failed" },
+      { status: 500 }
+    );
   }
-
-  await enqueueJob({
-    contentItemId: item.id,
-    temporaryUploadId: upload.id,
-    jobType: "transcribe",
-    priority: 30,
-  });
-
-  return NextResponse.json({
-    contentItem: item,
-    temporaryUpload: upload,
-    platformPosts: posts,
-  });
 }
