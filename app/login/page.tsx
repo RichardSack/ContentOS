@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { getSupabaseClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,30 +18,30 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      if (mode === "register") {
-        const { data, error: signUpError } = await getSupabaseClient().auth.signUp({
-          email,
-          password,
-          options: {
-            data: { full_name: displayName || email.split("@")[0] },
-            emailRedirectTo: `${window.location.origin}/admin`,
-          },
-        });
-        if (signUpError) throw signUpError;
-        if (data.session) {
-          router.push("/admin");
-        } else {
-          setError("Registrierung erfolgreich. Bitte bestätige deine Email, falls aktiviert.");
-        }
+      const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
+      const body =
+        mode === "register"
+          ? { email, password, displayName }
+          : { email, password };
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Request failed");
+
+      if (json.session?.access_token) {
+        localStorage.setItem("sb_access_token", json.session.access_token);
+        localStorage.setItem("sb_refresh_token", json.session.refresh_token);
+      }
+
+      if (mode === "register" && !json.session) {
+        setError("Registrierung erfolgreich. Bitte bestätige deine Email.");
       } else {
-        const { data, error: signInError } = await getSupabaseClient().auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (signInError) throw signInError;
-        if (data.session) {
-          router.push("/admin");
-        }
+        router.push("/admin");
       }
     } catch (err: any) {
       setError(err.message || "Fehler");

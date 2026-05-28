@@ -37,29 +37,31 @@ export default function AdminPage() {
   // Auth check: redirect to /login if not authenticated
   useEffect(() => {
     async function checkAuth() {
-      const {
-        data: { session },
-      } = await getSupabaseClient().auth.getSession();
-
-      if (!session) {
+      const token = localStorage.getItem("sb_access_token");
+      if (!token) {
         router.replace("/login");
         return;
       }
 
-      // Fetch user role from our users table
-      const { data: profile } = (await getSupabaseClient()
-        .from("users")
-        .select("role")
-        .eq("id", session.user.id)
-        .maybeSingle()) as { data: { role: string } | null };
+      try {
+        const res = await fetch("/api/auth/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error("Session invalid");
 
-      setUser({
-        id: session.user.id,
-        email: session.user.email || "",
-        role: profile?.role || "creator",
-        accessToken: session.access_token,
-      });
-      setLoading(false);
+        const data = await res.json();
+        setUser({
+          id: data.id,
+          email: data.email,
+          role: data.role || "creator",
+          accessToken: token,
+        });
+        setLoading(false);
+      } catch {
+        localStorage.removeItem("sb_access_token");
+        localStorage.removeItem("sb_refresh_token");
+        router.replace("/login");
+      }
     }
 
     checkAuth();
@@ -143,7 +145,8 @@ export default function AdminPage() {
   }
 
   async function logout() {
-    await getSupabaseClient().auth.signOut();
+    localStorage.removeItem("sb_access_token");
+    localStorage.removeItem("sb_refresh_token");
     router.replace("/login");
   }
 
