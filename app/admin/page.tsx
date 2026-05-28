@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase/client";
-import LoginGate from "./components/LoginGate";
 import OAuthPanel from "./components/OAuthPanel";
 import DashboardStats from "./components/DashboardStats";
 import UploadForm from "./components/UploadForm";
@@ -15,9 +15,17 @@ interface DashboardStatsType {
   scheduled: any[];
 }
 
+interface UserSession {
+  id: string;
+  email: string;
+  role: string | null;
+  accessToken: string;
+}
+
 export default function AdminPage() {
-  const [secret, setSecret] = useState("");
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const router = useRouter();
+  const [user, setUser] = useState<UserSession | null>(null);
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [platforms, setPlatforms] = useState<{ id: string; name: string }[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
@@ -26,11 +34,39 @@ export default function AdminPage() {
   >([]);
   const [stats, setStats] = useState<DashboardStatsType | null>(null);
 
-  // Initial load: login check + platform list
+  // Auth check: redirect to /login if not authenticated
   useEffect(() => {
-    const saved = localStorage.getItem("cos_admin_secret");
-    if (saved) setIsLoggedIn(true);
+    async function checkAuth() {
+      const {
+        data: { session },
+      } = await getSupabaseClient().auth.getSession();
 
+      if (!session) {
+        router.replace("/login");
+        return;
+      }
+
+      // Fetch user role from our users table
+      const { data: profile } = (await getSupabaseClient()
+        .from("users")
+        .select("role")
+        .eq("id", session.user.id)
+        .maybeSingle()) as { data: { role: string } | null };
+
+      setUser({
+        id: session.user.id,
+        email: session.user.email || "",
+        role: profile?.role || "creator",
+        accessToken: session.access_token,
+      });
+      setLoading(false);
+    }
+
+    checkAuth();
+  }, [router]);
+
+  // Load platforms (public data, works without full auth)
+  useEffect(() => {
     async function loadPlatforms() {
       try {
         const { data } = await getSupabaseClient()
@@ -57,15 +93,14 @@ export default function AdminPage() {
     loadPlatforms();
   }, []);
 
-  // After login: load accounts, stats, check OAuth callback params
+  // Load creator-specific data after auth confirmed
   useEffect(() => {
-    if (!isLoggedIn) return;
+    if (!user) return;
 
     async function loadAccounts() {
       try {
-        const adminSecret = localStorage.getItem("cos_admin_secret") || "";
         const res = await fetch("/api/admin/accounts", {
-          headers: { Authorization: `Bearer ${adminSecret}` },
+          headers: { Authorization: `Bearer ${user!.accessToken}` },
         });
         if (!res.ok) throw new Error("Failed to load accounts");
         const json = await res.json();
@@ -77,9 +112,8 @@ export default function AdminPage() {
 
     async function loadStats() {
       try {
-        const adminSecret = localStorage.getItem("cos_admin_secret") || "";
         const res = await fetch("/api/admin/stats", {
-          headers: { Authorization: `Bearer ${adminSecret}` },
+          headers: { Authorization: `Bearer ${user!.accessToken}` },
         });
         if (res.ok) {
           const json = await res.json();
@@ -93,6 +127,7 @@ export default function AdminPage() {
     loadAccounts();
     loadStats();
 
+    // Check URL for OAuth callback result
     const params = new URLSearchParams(window.location.search);
     const connected = params.get("connected");
     const error = params.get("error");
@@ -101,16 +136,15 @@ export default function AdminPage() {
     if (connected || error) {
       window.history.replaceState({}, "", window.location.pathname);
     }
-  }, [isLoggedIn]);
+  }, [user]);
 
   function capitalize(s: string) {
     return s[0]?.toUpperCase() + s.slice(1);
   }
 
-  function handleLogin(secretInput: string) {
-    localStorage.setItem("cos_admin_secret", secretInput);
-    setIsLoggedIn(true);
-    setSecret(secretInput);
+  async function logout() {
+    await getSupabaseClient().auth.signOut();
+    router.replace("/login");
   }
 
   function connectPlatform(platformId: string) {
@@ -118,13 +152,13 @@ export default function AdminPage() {
   }
 
   async function disconnectAccount(accountId: string) {
-    const adminSecret = localStorage.getItem("cos_admin_secret") || "";
+    if (!user) return;
     try {
       const res = await fetch("/api/admin/disconnect", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${adminSecret}`,
+          Authorization: `Bearer ${user.accessToken}`,
         },
         body: JSON.stringify({ accountId }),
       });
@@ -149,12 +183,12 @@ export default function AdminPage() {
   }
 
   async function handleUpload(form: HTMLFormElement, formData: FormData) {
+    if (!user) return;
     setMessage("");
-    const adminSecret = localStorage.getItem("cos_admin_secret") || "";
 
     const res = await fetch("/api/upload", {
       method: "POST",
-      headers: { Authorization: `Bearer ${adminSecret}` },
+      headers: { Authorization: `Bearer ${user.accessToken}` },
       body: formData,
     });
 
@@ -165,13 +199,32 @@ export default function AdminPage() {
     setSelectedPlatforms(platforms.map((p) => p.id));
   }
 
-  if (!isLoggedIn) {
-    return <LoginGate onLogin={handleLogin} />;
+  if (loading) {
+    return (
+      <main className="flex items-center justify-center min-h-screen">
+        <div className="text-gray-400">Lade...</div>
+      </main>
+    );
   }
+
+  if (!user) return null; // router.replace already fired
 
   return (
     <main className="max-w-2xl mx-auto px-4 py-12">
-      <h1 className="text-3xl font-bold mb-6">Content Upload</h1>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">Content Upload</h1>
+          <p className="text-sm text-gray-400">
+            {user.email} • {user.role === "admin" ? "Admin" : "Creator"}
+          </p>
+        </div>
+        <button
+          onClick={logout}
+          className="text-sm bg-surface-700 hover:bg-surface-600 border border-surface-500 px-4 py-2 rounded-lg transition"
+        >
+          Ausloggen
+        </button>
+      </div>
 
       {message && (
         <div className="bg-surface-600 border border-surface-500 rounded-lg p-4 mb-6 text-sm">
@@ -193,7 +246,7 @@ export default function AdminPage() {
         selectedPlatforms={selectedPlatforms}
         isConnected={isPlatformConnected}
         onToggle={togglePlatform}
-        onSubmit={handleUpload}
+	onSubmit={handleUpload}
       />
     </main>
   );
