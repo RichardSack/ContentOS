@@ -306,6 +306,16 @@ Platform **account tokens** come from `platform_accounts` table after OAuth call
 | OAuth tokens in DB, not env | Multi-user future + token rotation | `platform_accounts` table with `user_id` nullable |
 | Anon key + service role separation | RLS policies need service role for admin ops | `supabaseAdmin` for API routes, `getSupabaseClient()` for public reads |
 
+## 15. Future Roadmap
+
+| Feature | Status | Notiz |
+|---------|--------|-------|
+| Multi-User Auth | 🔄 In Progress | Creator-Accounts mit eigener OAuth-Verknüpfung |
+| Subdomain pro Creator | 📋 Planned | `creator.contentos.app` — dedizierte Suchseite pro Creator |
+| **Cross-Platform Statistiken** | 📋 Planned | Creator sollen Performance-Metriken (Views, Engagement, Reichweite) über **alle** verbundenen Plattformen aggregiert nachvollziehen können. KPI-Dashboard mit Plattform-Vergleich. |
+| Podcast/Audio Upload | 📋 Planned | AssemblyAI unterstützt Audio → gleiche Pipeline |
+| Webhook-gestütztes Polling | 📋 Planned | TikTok/Instagram asynchrone Verarbeitung via Status-Webhooks |
+
 ---
 
 *Last updated: 2026-05-28 (after chunked upload, RLS, OAuth URN fetch)*
