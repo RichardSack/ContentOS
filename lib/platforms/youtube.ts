@@ -2,6 +2,7 @@ import type { PlatformAdapter } from "./types";
 import { getActivePlatformAccount, persistTokens } from "./account";
 import { downloadVideo } from "./utils";
 import { fetchWithTimeout } from "@/lib/fetch-timeout";
+import { uploadInChunks } from "@/lib/chunked-upload";
 
 const YOUTUBE_UPLOAD_BASE =
   "https://www.googleapis.com/upload/youtube/v3/videos";
@@ -113,16 +114,8 @@ export const youtubeAdapter: PlatformAdapter = {
       );
     }
 
-    // 2. Upload video bytes
-    const uploadRes = await fetchWithTimeout(uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Type": contentType,
-        "Content-Length": String(size),
-      },
-      body: buffer,
-    });
-
+    // 2. Upload video bytes in chunks (resumable, lower memory pressure)
+    const uploadRes = await uploadInChunks(uploadUrl, buffer);
     if (!uploadRes.ok) {
       const errText = await uploadRes.text().catch(() => uploadRes.statusText);
       throw new Error(`YouTube upload failed: ${errText}`);
