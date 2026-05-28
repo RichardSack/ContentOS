@@ -79,7 +79,12 @@ app/
   layout.tsx                  # Black bg, suppressHydrationWarning
   globals.css                 # @import "tailwindcss"
   admin/
-    page.tsx                  # Upload form + OAuth connect/disconnect + dashboard stats
+    page.tsx                  # Orchestrator (~100 lines)
+    components/
+      LoginGate.tsx           # Admin login UI
+      OAuthPanel.tsx        # Connect/disconnect platform accounts
+      DashboardStats.tsx      # Stats cards + pending jobs list
+      UploadForm.tsx          # Upload form with validation
   api/
     auth/[platform]/          # OAuth redirect
       route.ts
@@ -117,9 +122,19 @@ lib/
     linkedin.ts, instagram.ts  # OAuth2 + publish adapters
   jobs/
     queue.ts                  # enqueueJob(), claimPendingJobs()
-    handlers.ts               # All 6 job-type handlers
+    handlers/
+      index.ts                # Registry: HANDLERS map + runJob dispatcher
+      shared.ts               # addBackoffMinutes, getSignedTempUrl
+      transcribe.ts
+      generate-summary.ts
+      create-combined-document.ts
+      create-embedding.ts
+      publish-to-platform.ts
+      cleanup-temp-upload.ts
+  upload/
+    validate.ts               # MIME, extension, size checks
+    service.ts              # processUpload() — business logic extracted from route
   fetch-timeout.ts            # AbortController fetch wrapper (30s)
-  upload/validate.ts          # MIME, extension, size checks
   chunked-upload.ts           # YouTube 8MB chunk resume upload
 migrations/
   001_oauth.sql              # oauth_states + platform_accounts.user_id
