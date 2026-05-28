@@ -95,7 +95,7 @@ export default function UploadForm({
         <textarea
           name="caption"
           rows={2}
-          className="w-full bg-surface-700 border border-surface-500 rounded-lg px-4 py-3 outline-none focus-ring-2 focus:ring-surface-400"
+          className="w-full bg-surface-700 border border-surface-500 rounded-lg px-4 py-3 outline-none focus:ring-2 focus:ring-surface-400"
         />
       </div>
 
