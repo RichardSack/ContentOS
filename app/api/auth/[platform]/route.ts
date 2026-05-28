@@ -1,69 +1,72 @@
-import { NextResponse } from "next/server";
-import { z } from "zod";
+import { NextRequest, NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
+import { generateState, generatePKCE, defaultExpiresAt } from "@/lib/oauth/core";
 import { getOAuthConfig } from "@/lib/oauth/config";
-import { generateState, generatePKCE, storeState } from "@/lib/oauth/core";
 
 export async function GET(
-  req: Request,
+  req: NextRequest,
   { params }: { params: Promise<{ platform: string }> }
 ) {
   const { platform } = await params;
 
-  // Validate platform exists
-  const cfg = getOAuthConfig(platform);
-  const clientId = process.env[cfg.clientIdEnv];
-  if (!clientId) {
-    return NextResponse.json(
-      { error: `OAuth not configured for ${platform}. Set ${cfg.clientIdEnv}.` },
-      { status: 400 }
+  // Verify platform exists and is active
+  const { data: platformRow } = await supabaseAdmin
+    .from("platforms")
+    .select("id, name")
+    .eq("id", platform)
+    .eq("is_active", true)
+    .single();
+
+  if (!platformRow) {
+    return NextResponse.redirect(
+      new URL("/admin?error=unknown_platform", process.env.APP_BASE_URL)
     );
   }
 
-  // Generate CSRF state
+  // Load env credentials for the platform
+  const clientId = process.env[`${platform.toUpperCase()}_CLIENT_ID`] || "";
+  if (!clientId) {
+    return NextResponse.redirect(
+      new URL(`/admin?error=no_client_id_for_${platform}`, process.env.APP_BASE_URL)
+    );
+  }
+
+  const config = getOAuthConfig(platform);
   const state = generateState();
 
-  // PKCE for supported platforms
+  let pkceVerifier: string | undefined;
   let codeChallenge: string | undefined;
-  let codeVerifier: string | undefined;
-  if (cfg.pkce) {
+
+  if (config.pkce) {
     const pkce = generatePKCE();
-    codeVerifier = pkce.verifier;
-    codeChallenge = pkce.challenge;
+    pkceVerifier = pkce.code_verifier;
+    codeChallenge = pkce.code_challenge;
   }
 
-  // Persist state in DB (for callback verification)
-  await storeState({
-    platformId: platform,
+  // Store state in DB (with optional PKCE verifier)
+  const { error: dbErr } = await supabaseAdmin.from("oauth_states").insert({
+    platform_id: platform,
     state,
-    codeVerifier,
-    redirectUrl: "/admin",
-    expiresInMinutes: 10,
+    pkce_code_verifier: pkceVerifier || null,
+    redirect_url: "/admin",
+    expires_at: defaultExpiresAt(),
   });
 
-  // Build authorization URL
-  const authUrl = new URL(cfg.authorizationUrl);
-  authUrl.searchParams.set("client_id", clientId);
-  authUrl.searchParams.set("response_type", "code");
-  authUrl.searchParams.set("scope", cfg.scopes.join(" "));
-  authUrl.searchParams.set("redirect_uri", cfg.getRedirectUri());
-  authUrl.searchParams.set("state", state);
-
-  if (cfg.pkce && codeChallenge) {
-    authUrl.searchParams.set("code_challenge", codeChallenge);
-    authUrl.searchParams.set("code_challenge_method", "S256");
+  if (dbErr) {
+    console.error("Failed to store OAuth state:", dbErr);
+    return NextResponse.redirect(
+      new URL("/admin?error=state_storage_failed", process.env.APP_BASE_URL)
+    );
   }
 
-  // Platform-specific tweaks
-  if (cfg.platformId === "youtube" || cfg.platformId === "linkedin") {
-    // Google / LinkedIn support access_type and prompt
-    authUrl.searchParams.set("access_type", "offline");
-    authUrl.searchParams.set("prompt", "consent");
-  }
+  const redirectUri = `${process.env.APP_BASE_URL || "http://localhost:3000"}/api/auth`;
+  const url = config.buildAuthorizeUrl({
+    clientId,
+    redirectUri,
+    state,
+    scope: config.scopes.join(","),
+    codeChallenge,
+  });
 
-  if (cfg.platformId === "instagram") {
-    // Facebook OAuth
-    authUrl.searchParams.set("config_id", "0"); // optional
-  }
-
-  return NextResponse.redirect(authUrl.toString(), 302);
+  return NextResponse.redirect(url);
 }

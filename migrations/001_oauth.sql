@@ -1,34 +1,28 @@
--- OAuth state store for CSRF protection and callback validation
-CREATE TABLE IF NOT EXISTS oauth_states (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  platform_id text NOT NULL,
-  state text NOT NULL,
+-- OAuth2 Multi-User-ready Migration
+-- Admin accounts have user_id = NULL (current behavior)
+-- Future: each user gets their own platform_accounts rows with user_id set
+
+alter table platform_accounts
+  add column if not exists user_id uuid,
+  add column if not exists connected_at timestamptz not null default now();
+
+create index if not exists idx_platform_accounts_user
+on platform_accounts (user_id, platform_id, is_active);
+
+-- OAuth state/pkce store for CSRF protection
+create table if not exists oauth_states (
+  id uuid primary key default gen_random_uuid(),
+  platform_id text not null references platforms(id) on delete cascade,
+  state text not null,
   pkce_code_verifier text,
   redirect_url text,
-  expires_at timestamptz NOT NULL DEFAULT (now() + interval '10 minutes'),
-  created_at timestamptz NOT NULL DEFAULT now()
+  expires_at timestamptz not null default (now() + interval '10 minutes'),
+  created_at timestamptz not null default now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_oauth_states_expires
-ON oauth_states(expires_at);
+create index if not exists idx_oauth_states_expires
+on oauth_states (expires_at)
+where expires_at < now();
 
-CREATE INDEX IF NOT EXISTS idx_oauth_states_lookup
-ON oauth_states(platform_id, state);
-
--- Prune expired states (optional cleanup trigger)
-CREATE OR REPLACE FUNCTION prune_expired_oauth_states()
-RETURNS void
-LANGUAGE sql
-AS $$
-  DELETE FROM oauth_states WHERE expires_at < now();
-$$;
-
--- Add multi-user future-proofing columns to platform_accounts
-ALTER TABLE platform_accounts
-  ADD COLUMN IF NOT EXISTS user_id uuid,
-  ADD COLUMN IF NOT EXISTS connected_at timestamptz DEFAULT now();
-
--- Note: when adding multi-user later, also add:
--- ALTER TABLE platform_accounts ADD CONSTRAINT unique_account_per_user
--- UNIQUE (platform_id, user_id, account_name);
--- And RLS policies for user_id = auth.uid()
+create index if not exists idx_oauth_states_lookup
+on oauth_states (platform_id, state);
