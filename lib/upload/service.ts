@@ -15,12 +15,14 @@ export async function processUpload(
     caption,
     scheduledAt,
     platformIds,
+    userId,
   }: {
     title: string;
     description: string;
     caption: string;
     scheduledAt: string | null;
     platformIds: string[];
+    userId?: string | null;
   }
 ): Promise<UploadResult> {
   // 1. Validate platforms
@@ -46,6 +48,7 @@ export async function processUpload(
       description,
       processing_status: "uploaded",
       content_type: "short_video",
+      user_id: userId,
     })
     .select("*")
     .single();

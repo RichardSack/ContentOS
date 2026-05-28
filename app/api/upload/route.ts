@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { assertAdmin } from "@/lib/auth/admin";
+import { requireCreator } from "@/lib/auth/user";
 import { validateUpload } from "@/lib/upload/validate";
 import { processUpload } from "@/lib/upload/service";
 
 export async function POST(req: NextRequest) {
-  try {
-    assertAdmin(req);
-  } catch {
+  const user = await requireCreator(req).catch(() => null);
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -51,6 +50,7 @@ export async function POST(req: NextRequest) {
       caption,
       scheduledAt,
       platformIds,
+      userId: user.id,
     });
     return NextResponse.json(result);
   } catch (err: any) {
