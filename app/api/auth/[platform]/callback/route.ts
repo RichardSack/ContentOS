@@ -4,6 +4,7 @@ import { validateState } from "@/lib/oauth/core";
 import { getOAuthConfig } from "@/lib/oauth/config";
 import { fetchWithTimeout } from "@/lib/fetch-timeout";
 import { fetchLinkedInOwnerUrn } from "@/lib/oauth/callback-post";
+import { getUser } from "@/lib/auth/user";
 
 export async function GET(
   req: NextRequest,
@@ -29,7 +30,7 @@ export async function GET(
     );
   }
 
-  // Retrieve stored state from DB
+  // 1. Verify state in DB
   const { data: stateRow, error: stateErr } = await supabaseAdmin
     .from("oauth_states")
     .select("*")
@@ -45,10 +46,13 @@ export async function GET(
     );
   }
 
-  // Delete used state immediately
   await supabaseAdmin.from("oauth_states").delete().eq("id", stateRow.id);
 
-  // Exchange code for tokens
+  // 2. Identify calling user (Bearer token or cookie)
+  const currentUser = await getUser(req);
+  const userId = currentUser?.id ?? null;
+
+  // 3. Exchange code for tokens
   const config = getOAuthConfig(platform);
   const clientId = process.env[`${platform.toUpperCase()}_CLIENT_ID`] || "";
   const clientSecret =
@@ -97,28 +101,32 @@ export async function GET(
       ? (tokenData[config.fields.refreshToken] as string | undefined)
       : undefined;
     const expiresIn = config.fields.expiresIn
-      ? (tokenData[config.fields.expiresIn] as number | undefined)
+      ? (tokenData[config.fields.expiresIn as string] as number | undefined)
       : undefined;
 
     const expiresAt = expiresIn
       ? new Date(Date.now() + expiresIn * 1000).toISOString()
       : undefined;
 
-    // Upsert into platform_accounts (admin has user_id = null for now)
+    // 4. Upsert into platform_accounts (scoped to user)
     const { error: upsertErr } = await supabaseAdmin
       .from("platform_accounts")
       .upsert(
         {
           platform_id: platform,
-          account_name: platform, // placeholder until we fetch real name
+          account_name: platform,
           access_token: accessToken,
           refresh_token: refreshToken || null,
           token_expires_at: expiresAt || null,
           is_active: true,
           connected_at: new Date().toISOString(),
-          user_id: null,
+          user_id: userId,
         },
-        { onConflict: "platform_id" } // admin: one per platform for now
+        {
+          onConflict: userId
+            ? "platform_id, user_id"
+            : "platform_id",
+        }
       );
 
     if (upsertErr) {
@@ -128,16 +136,21 @@ export async function GET(
       );
     }
 
-    // LinkedIn: auto-fetch owner URN and store in metadata
+    // 5. LinkedIn: auto-fetch owner URN
     if (platform === "linkedin") {
       try {
         const urn = await fetchLinkedInOwnerUrn(accessToken);
         if (urn) {
-          await supabaseAdmin
+          const updateQuery = supabaseAdmin
             .from("platform_accounts")
             .update({ metadata: { linkedin_owner_urn: urn } })
-            .eq("platform_id", "linkedin")
-            .is("user_id", null);
+            .eq("platform_id", "linkedin");
+
+          if (userId) {
+            await updateQuery.eq("user_id", userId);
+          } else {
+            await updateQuery.is("user_id", null);
+          }
         }
       } catch (e) {
         console.warn("LinkedIn URN fetch failed:", e);
