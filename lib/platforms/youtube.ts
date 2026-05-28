@@ -1,5 +1,6 @@
 import type { PlatformAdapter } from "./types";
-import { getActivePlatformAccount } from "./account";
+import { getActivePlatformAccount, persistTokens } from "./account";
+import { downloadVideo } from "./utils";
 
 const YOUTUBE_UPLOAD_BASE =
   "https://www.googleapis.com/upload/youtube/v3/videos";
@@ -42,21 +43,6 @@ async function getAccessToken(account: {
   };
 }
 
-async function downloadVideo(url: string): Promise<{
-  buffer: ArrayBuffer;
-  size: number;
-  contentType: string;
-}> {
-  const res = await fetch(url, { method: "GET" });
-  if (!res.ok) {
-    throw new Error(`Failed to download video from temporary URL: ${res.status} ${res.statusText}`);
-  }
-  const size = Number(res.headers.get("content-length") || 0);
-  const contentType = res.headers.get("content-type") || "video/*";
-  const buffer = await res.arrayBuffer();
-  return { buffer, size, contentType };
-}
-
 /**
  * Uploads a video to YouTube via the Data API resumable upload flow.
  * Works without browser redirects by downloading the video bytes server-side
@@ -71,7 +57,16 @@ export const youtubeAdapter: PlatformAdapter = {
 
   async publish(input) {
     const account = await getActivePlatformAccount("youtube");
-    const { accessToken } = await getAccessToken(account);
+    const { accessToken, expiresAt } = await getAccessToken(account);
+
+    // Persist updated access token + expiry (Google does not return a new
+    // refresh_token on refresh, so we leave that untouched).
+    if (expiresAt) {
+      await persistTokens(account.id, {
+        access_token: accessToken,
+        expires_at: new Date(expiresAt).toISOString(),
+      });
+    }
 
     const { buffer, size, contentType } = await downloadVideo(
       input.temporaryUploadUrl

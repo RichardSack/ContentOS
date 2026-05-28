@@ -1,9 +1,12 @@
 import type { PlatformAdapter } from "./types";
-import { getActivePlatformAccount } from "./account";
+import { getActivePlatformAccount, persistTokens } from "./account";
 
 const TIKTOK_API_BASE = "https://open.tiktokapis.com";
 
-async function refreshAccessToken(refreshToken?: string | null): Promise<string> {
+async function refreshAccessToken(refreshToken?: string | null): Promise<{
+  access_token: string;
+  refresh_token?: string;
+}> {
   const clientKey = process.env.TIKTOK_CLIENT_KEY;
   const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
   const token = refreshToken || process.env.TIKTOK_REFRESH_TOKEN;
@@ -33,14 +36,10 @@ async function refreshAccessToken(refreshToken?: string | null): Promise<string>
     );
   }
 
-  if (data.refresh_token && data.refresh_token !== token) {
-    console.warn(
-      "TikTok refresh_token rotated. Update platform_accounts row with new token:",
-      data.refresh_token
-    );
-  }
-
-  return data.access_token as string;
+  return {
+    access_token: data.access_token as string,
+    refresh_token: data.refresh_token as string | undefined,
+  };
 }
 
 export const tiktokAdapter: PlatformAdapter = {
@@ -49,12 +48,27 @@ export const tiktokAdapter: PlatformAdapter = {
   async publish(input) {
     let accessToken: string;
 
+    // Try DB account first
     try {
       const account = await getActivePlatformAccount("tiktok");
-      accessToken = await refreshAccessToken(account.refresh_token);
-    } catch {
-      // Fallback to env vars for backwards-compat until DB account is created
-      accessToken = await refreshAccessToken();
+      const result = await refreshAccessToken(account.refresh_token);
+      accessToken = result.access_token;
+
+      // Persist rotated refresh token if returned
+      if (result.refresh_token && result.refresh_token !== account.refresh_token) {
+        await persistTokens(account.id, {
+          access_token: result.access_token,
+          refresh_token: result.refresh_token,
+        });
+      }
+    } catch (accountErr: any) {
+      // If it's a DB-not-found error, fall back to env vars for backwards-compat
+      if (accountErr.message?.includes("No active platform account")) {
+        const result = await refreshAccessToken();
+        accessToken = result.access_token;
+      } else {
+        throw accountErr;
+      }
     }
 
     const res = await fetch(`${TIKTOK_API_BASE}/v2/post/publish/video/init/`, {

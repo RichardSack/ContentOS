@@ -1,5 +1,5 @@
 import type { PlatformAdapter } from "./types";
-import { getActivePlatformAccount } from "./account";
+import { getActivePlatformAccount, persistTokens } from "./account";
 
 const GRAPH_API_BASE = "https://graph.facebook.com/v18.0";
 
@@ -16,6 +16,11 @@ const GRAPH_API_BASE = "https://graph.facebook.com/v18.0";
  * fail until a valid platform_accounts row is inserted with:
  *   - access_token
  *   - metadata.instagram_business_account_id
+ *
+ * NOTE ON TOKENS: Instagram Graph API works best with a long-lived Page Access
+ * Token (obtained from a long-lived User Access Token). These typically do not
+ * expire. If you only have a short-lived token, store FACEBOOK_CLIENT_ID and
+ * FACEBOOK_CLIENT_SECRET in your env vars so the adapter can exchange it.
  *
  * TODOs:
  *   - Add webhook or polling job for async video processing (currently blocks)
@@ -62,12 +67,65 @@ async function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function ensureValidToken(
+  account: Awaited<ReturnType<typeof getActivePlatformAccount>>
+): Promise<string> {
+  const expiresAt = account.token_expires_at
+    ? new Date(account.token_expires_at).getTime()
+    : null;
+
+  if (expiresAt && Date.now() < expiresAt - 5 * 60 * 1000) {
+    // Token is still valid (with 5 min buffer) — no refresh needed
+    return account.access_token;
+  }
+
+  const clientId = process.env.FACEBOOK_CLIENT_ID;
+  const clientSecret = process.env.FACEBOOK_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      "Instagram access token is expired or about to expire. Set FACEBOOK_CLIENT_ID and FACEBOOK_CLIENT_SECRET in env vars to enable automatic token exchange."
+    );
+  }
+
+  // Exchange short-lived token for long-lived token (60 days)
+  const exchangeRes = await graphApiGet(
+    `/oauth/access_token?grant_type=fb_exchange_token`
+    +
+    `&client_id=${encodeURIComponent(clientId)}`
+    +
+    `&client_secret=${encodeURIComponent(clientSecret)}`
+    +
+    `&fb_exchange_token=${encodeURIComponent(account.access_token)}`
+  );
+
+  const data = exchangeRes as { access_token?: string; expires_in?: number };
+
+  if (!data.access_token) {
+    throw new Error(
+      `Instagram token exchange failed: ${JSON.stringify(exchangeRes)}`
+    );
+  }
+
+  const newExpiresAt = data.expires_in
+    ? new Date(Date.now() + data.expires_in * 1000).toISOString()
+    : undefined;
+
+  await persistTokens(account.id, {
+    access_token: data.access_token,
+    expires_at: newExpiresAt || null,
+  });
+
+  return data.access_token;
+}
+
 export const instagramAdapter: PlatformAdapter = {
   platformId: "instagram",
 
   async publish(input) {
     const account = await getActivePlatformAccount("instagram");
-    const accessToken = account.access_token;
+    const accessToken = await ensureValidToken(account);
+
     const igUserId = account.metadata?.instagram_business_account_id as
       | string
       | undefined;

@@ -35,3 +35,36 @@ export async function getActivePlatformAccount(
 
   return data as unknown as PlatformAccount;
 }
+
+/**
+ * Persist updated tokens back to the database after a refresh.
+ * Call this whenever a platform returns a new access_token or refresh_token.
+ */
+export async function persistTokens(
+  accountId: string,
+  tokens: {
+    access_token: string;
+    refresh_token?: string | null;
+    expires_at?: string | null;
+  }
+) {
+  const { error } = await supabaseAdmin
+    .from("platform_accounts")
+    .update({
+      access_token: tokens.access_token,
+      ...(tokens.refresh_token !== undefined
+        ? { refresh_token: tokens.refresh_token }
+        : {}),
+      ...(tokens.expires_at !== undefined
+        ? { token_expires_at: tokens.expires_at }
+        : {}),
+    })
+    .eq("id", accountId);
+
+  if (error) {
+    console.error(
+      `Failed to persist updated tokens for account ${accountId}:`,
+      error.message
+    );
+  }
+}

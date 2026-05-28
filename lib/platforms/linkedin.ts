@@ -1,12 +1,13 @@
 import type { PlatformAdapter } from "./types";
-import { getActivePlatformAccount } from "./account";
+import { getActivePlatformAccount, persistTokens } from "./account";
+import { downloadVideo } from "./utils";
 
 const LINKEDIN_API_BASE = "https://api.linkedin.com/v2";
 const LINKEDIN_OAUTH_BASE = "https://www.linkedin.com/oauth/v2/accessToken";
 
 async function refreshLinkedInToken(account: {
   refresh_token?: string | null;
-}): Promise<string> {
+}): Promise<{ access_token: string; refresh_token?: string }> {
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
   const refreshToken = account.refresh_token || process.env.LINKEDIN_REFRESH_TOKEN;
@@ -35,24 +36,10 @@ async function refreshLinkedInToken(account: {
     );
   }
 
-  return data.access_token as string;
-}
-
-async function downloadVideo(url: string): Promise<{
-  buffer: ArrayBuffer;
-  size: number;
-  contentType: string;
-}> {
-  const res = await fetch(url, { method: "GET" });
-  if (!res.ok) {
-    throw new Error(
-      `Failed to download video from temporary URL: ${res.status} ${res.statusText}`
-    );
-  }
-  const size = Number(res.headers.get("content-length") || 0);
-  const contentType = res.headers.get("content-type") || "video/mp4";
-  const buffer = await res.arrayBuffer();
-  return { buffer, size, contentType };
+  return {
+    access_token: data.access_token as string,
+    refresh_token: data.refresh_token as string | undefined,
+  };
 }
 
 export const linkedinAdapter: PlatformAdapter = {
@@ -60,7 +47,17 @@ export const linkedinAdapter: PlatformAdapter = {
 
   async publish(input) {
     const account = await getActivePlatformAccount("linkedin");
-    const accessToken = await refreshLinkedInToken(account);
+    const tokenResult = await refreshLinkedInToken(account);
+
+    // Persist rotated refresh token (LinkedIn rotates on every refresh)
+    if (tokenResult.refresh_token && tokenResult.refresh_token !== account.refresh_token) {
+      await persistTokens(account.id, {
+        access_token: tokenResult.access_token,
+        refresh_token: tokenResult.refresh_token,
+      });
+    }
+
+    const accessToken = tokenResult.access_token;
 
     const ownerUrn = account.metadata?.linkedin_owner_urn as string | undefined;
     if (!ownerUrn) {
