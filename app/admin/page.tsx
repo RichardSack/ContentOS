@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { supabaseClient } from "@/lib/supabase/client";
+import { getSupabaseClient } from "@/lib/supabase/client";
 
 export default function AdminPage() {
   const [secret, setSecret] = useState("");
@@ -14,14 +14,15 @@ export default function AdminPage() {
     const saved = localStorage.getItem("cos_admin_secret");
     if (saved) setIsLoggedIn(true);
 
-    supabaseClient
+    getSupabaseClient()
       .from("platforms")
       .select("id, name")
       .eq("is_active", true)
       .then(({ data }) => {
         if (data) {
-          setPlatforms(data);
-          setSelectedPlatforms(data.map((p) => p.id));
+          const typed = data as { id: string; name: string }[];
+          setPlatforms(typed);
+          setSelectedPlatforms(typed.map((p) => p.id));
         }
       });
   }, []);
