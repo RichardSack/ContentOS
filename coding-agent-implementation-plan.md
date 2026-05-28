@@ -46,11 +46,26 @@ SUPABASE_SERVICE_ROLE_KEY=
 OPENAI_API_KEY=
 ASSEMBLYAI_API_KEY=
 
+# TikTok
 TIKTOK_CLIENT_KEY=
 TIKTOK_CLIENT_SECRET=
 TIKTOK_REDIRECT_URI=
 TIKTOK_ACCESS_TOKEN=
 TIKTOK_REFRESH_TOKEN=
+
+# YouTube
+YOUTUBE_CLIENT_ID=
+YOUTUBE_CLIENT_SECRET=
+YOUTUBE_REFRESH_TOKEN=
+
+# LinkedIn
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=
+LINKEDIN_REFRESH_TOKEN=
+
+# Instagram / Facebook (für Token Exchange)
+FACEBOOK_CLIENT_ID=
+FACEBOOK_CLIENT_SECRET=
 
 APP_BASE_URL=
 CRON_SECRET=
@@ -58,6 +73,8 @@ ADMIN_SECRET=
 ```
 
 `ADMIN_SECRET` kann für den MVP als einfacher Schutz für Admin-Endpunkte verwendet werden. Später kann Auth ergänzt werden.
+
+Für Plattform-Accounts können OAuth-Credentials auch in der `platform_accounts` Tabelle gespeichert werden (Multi-User-fähig). Env-Variablen dienen als Fallback.
 
 ---
 
@@ -122,6 +139,8 @@ Implementiere diese Struktur:
 ```txt
 app/
   page.tsx
+  layout.tsx
+  globals.css
   admin/
     page.tsx
   api/
@@ -140,21 +159,35 @@ app/
 lib/
   supabase/
     admin.ts
+    client.ts
   ai/
     assembly.ts
     embeddings.ts
+  auth/
+    admin.ts
+  platforms/
+    types.ts
+    account.ts       # DB-Abfrage für OAuth-Credentials
+    utils.ts         # Shared helpers (downloadVideo)
+    tiktok.ts        # Voll implementiert
+    youtube.ts       # Voll implementiert
+    linkedin.ts      # Voll implementiert
+    instagram.ts     # Experimentell / Wackelig
+    index.ts
   jobs/
     queue.ts
     handlers.ts
-  platforms/
-    types.ts
-    tiktok.ts
-    index.ts
-  auth/
-    admin.ts
-README.md
 .env.example
+schema.sql
+postcss.config.mjs
+tailwind.config.ts
+next.config.ts
 ```
+
+### Neue DB-Tabelle
+
+- `platform_accounts` — speichert pro Plattform `access_token`, `refresh_token`, `token_expires_at`, `metadata`.
+- Wird für Multi-User und automatische Token-Rotation genutzt.
 
 ---
 
@@ -318,14 +351,25 @@ export interface PlatformAdapter {
 
 Datei: `lib/platforms/tiktok.ts`
 
-Implementiere zunächst robusten Platzhalter, der klaren Fehler wirft, falls TikTok noch nicht angebunden ist.
+Vollständig implementiert. Nutzt OAuth2 Refresh-Flow und Content Posting API (`/v2/post/publish/video/init/`). Liest Credentials bevorzugt aus `platform_accounts` (via `getActivePlatformAccount`), mit Fallback auf Env-Vars. Persistiert rotierte Tokens zurück nach DB.
 
-Danach optional TikTok Content Posting API integrieren.
+### YouTube Adapter
 
-Wichtig:
+Datei: `lib/platforms/youtube.ts`
 
-- TikTok-spezifische API Calls dürfen nur hier liegen.
-- Kein TikTok-Code in Job Handlern außer `getPlatformAdapter('tiktok')`.
+Resumable Upload via Data API v3. Lädt das Video in den Serverless-Speicher herunter und streamt es in YouTube. Speicher-warnung: Sehr große Videos könnten bei `arrayBuffer()` scheitern.
+
+### LinkedIn Adapter
+
+Datei: `lib/platforms/linkedin.ts`
+
+3-Step Upload: `registerUpload` → PUT Bytes → `ugcPosts` erstellen mit Video-Asset. Erfordert `metadata.linkedin_owner_urn` in `platform_accounts`.
+
+### Instagram Adapter
+
+Datei: `lib/platforms/instagram.ts`
+
+⚠️ Wackelig / Experimental. Graph API Container-Flow: `POST /media` (Container) → Polling auf `status_code=FINISHED` → `POST /media_publish`. Erfordert Instagram Business Account + `metadata.instagram_business_account_id`.
 
 ### Adapter Registry
 
@@ -334,9 +378,15 @@ Datei: `lib/platforms/index.ts`
 ```ts
 import type { PlatformAdapter } from './types';
 import { tiktokAdapter } from './tiktok';
+import { youtubeAdapter } from './youtube';
+import { linkedinAdapter } from './linkedin';
+import { instagramAdapter } from './instagram';
 
 const adapters: Record<string, PlatformAdapter> = {
   tiktok: tiktokAdapter,
+  youtube: youtubeAdapter,
+  linkedin: linkedinAdapter,
+  instagram: instagramAdapter,
 };
 
 export function getPlatformAdapter(platformId: string) {
@@ -401,24 +451,20 @@ Publishing Flow:
 
 ```text
 publish_to_platform
-→ adapter.publish(...)
+→ adapter.publish(...)  (pro platform_posts Eintrag)
 → platform_posts.post_status = published
-→ cleanup_temp_upload Job enqueue
+→ Nur wenn ALLE sibling platform_posts published/failed/cancelled:
+    cleanup_temp_upload Job enqueue
 ```
 
 Cleanup Flow:
 
 ```text
 cleanup_temp_upload
+→ Prüfe: temporary_uploads.status != deleted (idempotent)
 → Supabase Storage Datei löschen
 → temporary_uploads.status = deleted
 ```
-
-Wichtig:
-
-- Temporäre Datei erst löschen, wenn sie für geplante Plattform-Posts nicht mehr gebraucht wird.
-- Für MVP kann nach erfolgreichem TikTok Publish gelöscht werden, solange nur TikTok aktiv ist.
-- Später prüfen: Sind alle Platform Posts published/failed/cancelled?
 
 ---
 
@@ -441,7 +487,7 @@ Felder:
 - `description`
 - `caption`
 - `scheduledAt`
-- `platformId`, default `tiktok`
+- `platformId` (mehrfach, Checkboxen — per `formData.getAll("platformId")`)
 
 Ablauf:
 
@@ -449,8 +495,8 @@ Ablauf:
 2. `content_items` Eintrag erstellen.
 3. Datei in Supabase Storage `temp_uploads` hochladen.
 4. `temporary_uploads` Eintrag erstellen.
-5. `platform_posts` Eintrag erstellen.
-6. `transcribe` Job enqueuen.
+5. **Für jede ausgewählte Plattform** einen `platform_posts` Eintrag erstellen.
+6. Einen `transcribe` Job enqueuen (Plattform-agnostisch).
 7. Response mit IDs zurückgeben.
 
 Validierung:
@@ -458,7 +504,8 @@ Validierung:
 - file muss vorhanden sein
 - MIME Type sollte `video/*` sein
 - `scheduledAt` optional, aber wenn vorhanden valides Datum
-- `platformId` muss existierende aktive Plattform sein
+- Mindestens eine `platformId` muss übermittelt werden
+- Jede `platformId` muss existierende aktive Plattform sein
 
 Status:
 
@@ -579,7 +626,7 @@ Noch keine großen Design-Anpassungen.
 
 `app/admin/page.tsx`
 
-- einfacher Schutz über Eingabe von `ADMIN_SECRET` oder Header-basierter Test
+- einfacher Schutz über Eingabe von `ADMIN_SECRET` (wird in `localStorage` gespeichert)
 - Upload Form
 - Felder:
   - Datei
@@ -587,13 +634,14 @@ Noch keine großen Design-Anpassungen.
   - Beschreibung
   - Caption
   - scheduledAt
-  - Plattform-Auswahl, erstmal TikTok
-- POST `/api/upload`
+  - **Mehrfach-Plattform-Auswahl** (Checkboxen, dynamisch aus `platforms` Tabelle geladen)
+- POST `/api/upload` mit `Authorization: Bearer <ADMIN_SECRET>`
 
 Wichtig:
 
 - Admin UI nicht auf öffentlicher Seite anzeigen.
-- Admin Route kann für MVP simpel sein; später echte Auth ergänzen.
+- Plattformen werden dynamisch aus DB geladen (`getSupabaseClient().from("platforms")`), mit TikTok-Fallback wenn Supabase nicht konfiguriert ist.
+- Multi-Plattform-Auswahl erzeugt pro Plattform einen eigenen `platform_posts` Eintrag.
 
 ---
 
@@ -634,9 +682,19 @@ Authorization: Bearer <CRON_SECRET>
 ### Weitere Plattform hinzufügen
 
 1. Datensatz in `platforms` aktivieren oder hinzufügen.
-2. Adapter unter `lib/platforms/<platform>.ts` erstellen.
+2. Adapter unter `lib/platforms/<platform>.ts` erstellen (siehe `types.ts`).
 3. Adapter in `lib/platforms/index.ts` registrieren.
-4. Keine Änderungen an Suche, Content Items oder Embeddings nötig.
+4. OAuth-Credentials in `platform_accounts` speichern.
+5. Keine Änderungen an Suche, Content Items oder Embeddings nötig.
+
+### Token-Management (DB-basiert)
+
+Für jede Plattform muss ein Eintrag in `platform_accounts` existieren:
+- `access_token` — aktueller Access Token
+- `refresh_token` — für OAuth2 Refresh (falls unterstützt)
+- `metadata` — plattformspezifische Daten (z.B. `linkedin_owner_urn`, `instagram_business_account_id`)
+
+Die Adapter verwalten Token-Rotation automatisch. Neue Tokens werden nach erfolgreichem Refresh in die DB zurückgeschrieben.
 
 ### AssemblyAI
 
@@ -645,9 +703,8 @@ Authorization: Bearer <CRON_SECRET>
 
 ### TikTok
 
-- Credentials in `.env.local` setzen
-- TikTok Content Posting API im Adapter ergänzen
-- Bis dahin wirft der Adapter einen klaren Fehler
+- Voll implementiert. Credentials in `platform_accounts` oder `.env.local`.
+- Content Posting API nutzt `PULL_FROM_URL` mit signierter Supabase URL.
 
 ---
 
@@ -674,14 +731,14 @@ Der MVP ist fertig, wenn:
 
 1. Admin kann ein Video hochladen und ein Veröffentlichungsdatum setzen.
 2. Video wird temporär in Supabase Storage gespeichert.
-3. `content_items`, `temporary_uploads`, `platform_posts` werden erstellt.
+3. `content_items`, `temporary_uploads`, `platform_posts` werden erstellt (mehrere bei Multi-Plattform).
 4. Job Queue transkribiert mit AssemblyAI.
 5. Summary/Keywords werden erzeugt.
 6. Combined Document wird erstellt.
 7. Embedding wird gespeichert.
 8. Content Item wird `ready`.
 9. Öffentliche Suche findet den Content semantisch.
-10. Cronjob erkennt fällige Posts und erzeugt Publish Jobs.
-11. TikTok Adapter ist vorbereitet und sauber isoliert.
-12. Temporäre Dateien können per Cleanup Job gelöscht werden.
-13. README erklärt, wie weitere Plattformen integriert werden.
+10. Cronjob erkennt fällige Posts und erzeugt Publish Jobs pro Plattform.
+11. TikTok, YouTube und LinkedIn Adapter sind voll implementiert und isoliert.
+12. Temporäre Dateien werden nur gelöscht wenn **alle** Plattformen fertig sind.
+13. README erklärt Multi-User OAuth und Plattform-Erweiterung.

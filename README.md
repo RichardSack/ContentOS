@@ -9,11 +9,11 @@ Schlanke, plattformagnostische Social-Content-Suchmaschine.
 ## Tech Stack
 
 - **Next.js 15** (App Router, TypeScript)
-- **Tailwind CSS** (dark/black theme)
+- **Tailwind CSS v4** (dark/black theme)
 - **Supabase** (Postgres + pgvector + Storage)
 - **OpenAI** (Embeddings + Summary/Keywords)
 - **AssemblyAI** (Transkription)
-- **TikTok** (erste Plattform, vorbereitet aber noch nicht final implementiert)
+- **Plattform-Adapter:** TikTok, YouTube, LinkedIn, Instagram (letztere experimentell)
 
 ---
 
@@ -48,13 +48,24 @@ npm run dev
 | `SUPABASE_SERVICE_ROLE_KEY` | **Nur serverseitig** – für Storage und DB Admin-Zugriff |
 | `OPENAI_API_KEY` | Für Embeddings und Summary/Keywords |
 | `ASSEMBLYAI_API_KEY` | Für Video-Transkription |
-| `TIKTOK_CLIENT_KEY` | TikTok App Client Key (optional) |
-| `TIKTOK_CLIENT_SECRET` | TikTok App Client Secret (optional) |
-| `TIKTOK_ACCESS_TOKEN` | TikTok Access Token (optional) |
-| `TIKTOK_REFRESH_TOKEN` | TikTok Refresh Token (optional) |
 | `APP_BASE_URL` | Basis-URL der App, z.B. `https://contentos.vercel.app` |
 | `CRON_SECRET` | Geheimer Token für Cron-Endpunkte |
 | `ADMIN_SECRET` | Geheimer Token für Upload- und Admin-Seite |
+| **TikTok** | |
+| `TIKTOK_CLIENT_KEY` | TikTok App Client Key |
+| `TIKTOK_CLIENT_SECRET` | TikTok App Client Secret |
+| `TIKTOK_REFRESH_TOKEN` | TikTok Refresh Token (für OAuth2) |
+| **YouTube** | |
+| `YOUTUBE_CLIENT_ID` | Google OAuth2 Client ID |
+| `YOUTUBE_CLIENT_SECRET` | Google OAuth2 Client Secret |
+| `YOUTUBE_REFRESH_TOKEN` | YouTube Refresh Token |
+| **LinkedIn** | |
+| `LINKEDIN_CLIENT_ID` | LinkedIn OAuth2 Client ID |
+| `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth2 Client Secret |
+| `LINKEDIN_REFRESH_TOKEN` | LinkedIn Refresh Token |
+| **Instagram / Facebook** | |
+| `FACEBOOK_CLIENT_ID` | Facebook App ID (für Token-Exchange) |
+| `FACEBOOK_CLIENT_SECRET` | Facebook App Secret (für Token-Exchange) |
 
 ---
 
@@ -62,7 +73,10 @@ npm run dev
 
 - **Keine dauerhafte Videopeicherung:** Videos landen nur temporär in `temp_uploads` und werden nach erfolgreichem Publish gelöscht.
 - **Plattformagnostisch:** Alle plattformspezifischen Logik lebt ausschließlich in `lib/platforms/<platform>.ts`.
+- **Multi-User OAuth:** Neue Tabelle `platform_accounts` speichert pro Plattform `access_token`, `refresh_token`, `metadata`. Adapter rotten Tokens automatisch und schreiben neue Werte zurück.
+- **Multi-Platform Upload:** Der Admin kann mehrere Plattformen gleichzeitig auswählen. Es wird ein `platform_posts` Eintrag pro Plattform erzeugt.
 - **Job Queue:** Die Pipeline `transcribe → summary → combined document → embedding` läuft über `processing_jobs` mit Retry-Logik.
+- **Multi-Platform-Safe Cleanup:** Die temporäre Datei wird erst gelöscht, wenn **alle** `platform_posts` für ein Content Item in einem finalen Zustand (`published`, `failed`, `cancelled`) sind.
 - **Admin-Schutz:** Upload-Endpunkte und `/admin` erfordern `Bearer ADMIN_SECRET`.
 
 ---
@@ -103,7 +117,8 @@ Alternativ funktioniert auch jeder andere Node.js-Hosting-Anbieter.
 1. Datensatz in Tabelle `platforms` aktivieren oder hinzufügen.
 2. Adapter unter `lib/platforms/<platform>.ts` erstellen (siehe `types.ts`).
 3. Adapter in `lib/platforms/index.ts` registrieren.
-4. Keine Änderungen an Suche, Content Items oder Embeddings nötig.
+4. OAuth-Credentials in `platform_accounts` Tabelle speichern (siehe unten).
+5. Keine Änderungen an Suche, Content Items oder Embeddings nötig.
 
 ---
 
@@ -115,11 +130,28 @@ Alternativ funktioniert auch jeder andere Node.js-Hosting-Anbieter.
 
 ---
 
-## TikTok Integration
+## Plattform-Accounts (OAuth)
 
-- Credentials in `.env.local` setzen.
-- Content Posting API in `lib/platforms/tiktok.ts` ergänzen.
-- Bis dahin wirft der Adapter einen klaren Fehler, der im Job-Log landet.
+Für jede Plattform muss ein Eintrag in `platform_accounts` existieren:
+
+```sql
+insert into platform_accounts (platform_id, account_name, access_token, refresh_token, metadata)
+values ('tiktok', 'Mein TikTok Account', 'act.xxx', 'rft.yyy', '{}');
+
+-- YouTube braucht keine spezielle metadata
+insert into platform_accounts (platform_id, account_name, access_token, refresh_token, metadata)
+values ('youtube', 'Mein Kanal', 'ya29.xxx', '1//abc', '{}');
+
+-- LinkedIn braucht metadata.linkedin_owner_urn
+insert into platform_accounts (platform_id, account_name, access_token, refresh_token, metadata)
+values ('linkedin', 'Mein Profil', 'AQxxx', 'AQyyy', '{"linkedin_owner_urn": "urn:li:person:ABC123"}'::jsonb);
+
+-- Instagram braucht metadata.instagram_business_account_id
+insert into platform_accounts (platform_id, account_name, access_token, refresh_token, metadata)
+values ('instagram', 'Mein Business', 'EAAxxx', 'EAAyyy', '{"instagram_business_account_id": "987654321"}'::jsonb);
+```
+
+**Wichtig:** Die Adapter verwalten Token-Rotation automatisch. Rotierte `refresh_token` werden in die DB zurückgeschrieben, solange die Adapter-Implementierung dies unterstützt.
 
 ---
 
@@ -127,7 +159,9 @@ Alternativ funktioniert auch jeder andere Node.js-Hosting-Anbieter.
 
 1. Öffne `/admin` im Browser.
 2. Gib dein `ADMIN_SECRET` ein – es wird lokal im Browser gespeichert.
-3. Lade ein Video hoch. Alle weiteren Schritte (Transkription, Summary, Embedding) laufen automatisch über die Job Queue.
+3. Aktive Plattformen werden dynamisch aus der DB geladen (Checkboxen).
+4. Lade ein Video hoch. Alle weiteren Schritte (Transkription, Summary, Embedding) laufen automatisch über die Job Queue.
+5. Du kannst mehrere Plattformen gleichzeitig auswählen. Jede bekommt einen eigenen `platform_posts` Eintrag.
 
 ---
 
@@ -140,22 +174,23 @@ Um ContentOS vollständig nutzen zu können, erledige diese Schritte:
 3. [ ] **Storage Bucket `temp_uploads` anlegen** (private, keine öffentlichen Rechte).
 4. [ ] **`.env.local` erstellen** und alle Variablen mit echten Werten füllen (siehe `.env.example`).
 5. [ ] **Sichere Secrets setzen:** `CRON_SECRET` und `ADMIN_SECRET` auf starke, zufällige Werte ändern.
-6. [ ] **App deployen** (z.B. auf Vercel).
-7. [ ] **Cronjobs konfigurieren** (z.B. via Vercel Cron, GitHub Actions, oder externer Dienst), die die drei Endpunkte mit `Authorization: Bearer <CRON_SECRET>` aufrufen.
-8. [ ] **Optional: TikTok API freischalten**
-   - TikTok Developer Account + App erstellen.
-   - Content Posting API Zugriff beantragen.
-   - Credentials in `.env.local` und `lib/platforms/tiktok.ts` einbinden.
+6. [ ] **Plattform-Accounts anlegen:**
+   - Für jede Plattform, die du nutzen willst, einen Eintrag in `platform_accounts` erstellen.
+   - Für LinkedIn: `metadata.linkedin_owner_urn` setzen.
+   - Für Instagram: `metadata.instagram_business_account_id` setzen (erfordert Business/Creator Account).
+7. [ ] **App deployen** (z.B. auf Vercel).
+8. [ ] **Cronjobs konfigurieren** (z.B. via Vercel Cron, GitHub Actions, oder externer Dienst), die die drei Endpunkte mit `Authorization: Bearer <CRON_SECRET>` aufrufen.
 9. [ ] **Ersten Upload testen:**
    - `/admin` aufrufen, einloggen, Video hochladen.
+   - Option: mehrere Plattformen gleichzeitig auswählen.
    - Job Queue prüfen (`/api/jobs/process` manuell triggern oder warten, bis der Cron läuft).
    - Prüfen, ob `content_items.processing_status` auf `ready` wechselt.
 10. [ ] **Suche testen:** Öffentliche Seite (`/`) öffnen und nach Keywords aus dem hochgeladenen Video suchen.
 11. [ ] **Optional: Geplante Veröffentlichung testen**
-   - Upload mit `scheduledAt` in der Vergangenheit (zum Testen).
-   - Cron `/api/cron/publish-scheduled` laufen lassen.
-   - Prüfen, ob TikTok-Adapter-Fehler im Log landet (erwartet, bis TikTok implementiert ist).
-12. [ ] **Optional: Weitere Plattformen** (YouTube, Instagram, LinkedIn) nach dem gleichen Adapter-Muster hinzufügen.
+    - Upload mit `scheduledAt` in der Vergangenheit (zum Testen).
+    - Cron `/api/cron/publish-scheduled` laufen lassen.
+    - Prüfen, ob die Veröffentlichung auf den gewählten Plattformen funktioniert.
+12. [ ] **Optional: Neue Plattformen** nach dem Adapter-Muster hinzufügen.
 
 ---
 

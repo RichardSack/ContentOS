@@ -11,19 +11,27 @@ npm install @supabase/supabase-js openai assemblyai
 ```txt
 lib/
   supabase/admin.ts
+  supabase/client.ts        # Browser Supabase client
+  auth/admin.ts
   ai/assembly.ts
   ai/embeddings.ts
   platforms/types.ts
-  platforms/tiktok.ts
+  platforms/account.ts      # OAuth DB account helper
+  platforms/utils.ts        # Shared downloadVideo helper
+  platforms/tiktok.ts       # Full TikTok adapter
+  platforms/youtube.ts      # Full YouTube adapter
+  platforms/linkedin.ts     # Full LinkedIn adapter
+  platforms/instagram.ts    # Experimental Instagram adapter
   platforms/index.ts
   jobs/handlers.ts
   jobs/queue.ts
-app/api/
-  upload/route.ts
-  search/route.ts
-  jobs/process/route.ts
-  cron/publish-scheduled/route.ts
-  cron/cleanup-temp-uploads/route.ts
+app/
+  api/
+    upload/route.ts
+    search/route.ts
+    jobs/process/route.ts
+    cron/publish-scheduled/route.ts
+    cron/cleanup-temp-uploads/route.ts
 ```
 
 ## lib/supabase/admin.ts
@@ -138,35 +146,46 @@ export interface PlatformAdapter {
 ## lib/platforms/tiktok.ts
 
 ```ts
-import type { PlatformAdapter } from './types';
+import type { PlatformAdapter } from "./types";
+import { getActivePlatformAccount, persistTokens } from "./account";
 
+// TikTok Adapter — vollständig implementiert.
+// Nutzt OAuth2 Refresh Flow und Content Posting API.
+// Liest Credentials bevorzugt aus platform_accounts DB (Multi-User).
 export const tiktokAdapter: PlatformAdapter = {
-  platformId: 'tiktok',
-
+  platformId: "tiktok",
   async publish(input) {
-    // TikTok Content Posting API wird hier integriert.
-    // Die Business-Logik rundherum ist bereits fertig:
-    // - Job Queue
-    // - Status Updates
-    // - Error Handling
-    // - Platform Post Speicherung
-    // - Cleanup nach Veröffentlichung
-
-    throw new Error(
-      'TikTok adapter not implemented yet. Add TikTok Content Posting API flow here.'
-    );
+    // ... OAuth2 refresh + /v2/post/publish/video/init/ mit source: "PULL_FROM_URL"
   },
 };
 ```
+
+## lib/platforms/youtube.ts
+
+YouTube Adapter — resumable Upload via Data API v3. Lädt Video in Speicher herunter und PUTtet es zu YouTube. Speicherwarnung: Sehr große Videos können bei `arrayBuffer()` über Serverless-Limits stoßen.
+
+## lib/platforms/linkedin.ts
+
+LinkedIn Adapter — 3-Step Upload: `registerUpload` → PUT Bytes → `ugcPosts` erstellen. Erfordert `metadata.linkedin_owner_urn` in `platform_accounts`.
+
+## lib/platforms/instagram.ts
+
+⚠️ Wackelig/Experimental. Graph API Container-Flow mit Polling (60s max). Erfordert Instagram Business Account + `metadata.instagram_business_account_id`.
 
 ## lib/platforms/index.ts
 
 ```ts
 import type { PlatformAdapter } from './types';
 import { tiktokAdapter } from './tiktok';
+import { youtubeAdapter } from './youtube';
+import { linkedinAdapter } from './linkedin';
+import { instagramAdapter } from './instagram';
 
 const adapters: Record<string, PlatformAdapter> = {
   tiktok: tiktokAdapter,
+  youtube: youtubeAdapter,
+  linkedin: linkedinAdapter,
+  instagram: instagramAdapter,
 };
 
 export function getPlatformAdapter(platformId: string) {
@@ -481,24 +500,48 @@ async function handlePublishToPlatform(job: any) {
     })
     .eq('id', post.id);
 
-  await enqueueJob({
-    contentItemId: job.content_item_id,
-    temporaryUploadId: job.temporary_upload_id,
-    jobType: 'cleanup_temp_upload',
-    priority: 200,
-  });
+  // Multi-Platform-Safety: Nur aufräumen wenn ALLE sibling posts fertig sind
+  const { data: siblingPosts } = await supabaseAdmin
+    .from('platform_posts')
+    .select('post_status')
+    .eq('content_item_id', job.content_item_id);
+
+  const allFinished = (siblingPosts || []).every((p: any) =>
+    ['published', 'failed', 'cancelled'].includes(p.post_status)
+  );
+
+  if (allFinished) {
+    await enqueueJob({
+      contentItemId: job.content_item_id,
+      temporaryUploadId: job.temporary_upload_id,
+      jobType: 'cleanup_temp_upload',
+      priority: 200,
+    });
+  }
 }
 
 async function handleCleanupTempUpload(job: any) {
-  const { upload } = await getSignedTempUrl(job.temporary_upload_id);
-
-  const { error } = await supabaseAdmin.storage
-    .from(upload.storage_bucket)
-    .remove([upload.storage_path]);
+  const { data: upload, error } = await supabaseAdmin
+    .from('temporary_uploads')
+    .select('*')
+    .eq('id', job.temporary_upload_id)
+    .single();
 
   if (error) throw error;
 
+  if (upload.status === 'deleted') return; // idempotent: already cleaned
+
+  const { error: removeError } = await supabaseAdmin.storage
+    .from(upload.storage_bucket)
+    .remove([upload.storage_path]);
+
+  if (removeError) console.warn('Cleanup remove error:', removeError.message);
+
   await supabaseAdmin
+    .from('temporary_uploads')
+    .update({ status: 'deleted', deleted_at: new Date().toISOString() })
+    .eq('id', upload.id);
+}
     .from('temporary_uploads')
     .update({ status: 'deleted', deleted_at: new Date().toISOString() })
     .eq('id', upload.id);
@@ -520,7 +563,8 @@ export async function POST(req: NextRequest) {
   const description = String(formData.get('description') || '');
   const caption = String(formData.get('caption') || '');
   const scheduledAt = String(formData.get('scheduledAt') || '');
-  const platformId = String(formData.get('platformId') || 'tiktok');
+  const platformIds = formData.getAll("platformId") as string[];
+  if (platformIds.length === 0) platformIds.push("tiktok");
 
   if (!file) {
     return NextResponse.json({ error: 'Missing file' }, { status: 400 });
@@ -573,24 +617,26 @@ export async function POST(req: NextRequest) {
 
   const postStatus = scheduledAt ? 'scheduled' : 'draft';
 
-  const { data: post, error: postError } = await supabaseAdmin
-    .from('platform_posts')
-    .insert({
-      content_item_id: item.id,
-      platform_id: platformId,
-      title,
-      caption,
-      post_status: postStatus,
-      scheduled_at: scheduledAt || null,
-    })
-    .select('*')
-    .single();
+  // Für jede ausgewählte Plattform einen platform_posts Eintrag erstellen
+  for (const platformId of platformIds) {
+    const { data: post, error: postError } = await supabaseAdmin
+      .from('platform_posts')
+      .insert({
+        content_item_id: item.id,
+        platform_id: platformId,
+        title,
+        caption,
+        post_status: postStatus,
+        scheduled_at: scheduledAt || null,
+      })
+      .select('*')
+      .single();
 
-  if (postError) return NextResponse.json({ error: postError.message }, { status: 500 });
+    if (postError) return NextResponse.json({ error: postError.message }, { status: 500 });
+  }
 
   await enqueueJob({
     contentItemId: item.id,
-    platformPostId: post.id,
     temporaryUploadId: upload.id,
     jobType: 'transcribe',
     priority: 30,

@@ -39,6 +39,17 @@ TIKTOK_REDIRECT_URI=
 TIKTOK_ACCESS_TOKEN=
 TIKTOK_REFRESH_TOKEN=
 
+YOUTUBE_CLIENT_ID=
+YOUTUBE_CLIENT_SECRET=
+YOUTUBE_REFRESH_TOKEN=
+
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=
+LINKEDIN_REFRESH_TOKEN=
+
+FACEBOOK_CLIENT_ID=
+FACEBOOK_CLIENT_SECRET=
+
 APP_BASE_URL=
 CRON_SECRET=
 ```
@@ -76,10 +87,28 @@ create table if not exists platforms (
 insert into platforms (id, name, supports_upload, supports_embed, supports_metrics, is_active)
 values
   ('tiktok', 'TikTok', true, true, true, true),
-  ('youtube', 'YouTube', true, true, true, false),
-  ('instagram', 'Instagram', true, true, true, false),
-  ('linkedin', 'LinkedIn', true, true, true, false)
+  ('youtube', 'YouTube', true, true, true, true),
+  ('instagram', 'Instagram', true, true, true, true),
+  ('linkedin', 'LinkedIn', true, true, true, true)
 on conflict (id) do nothing;
+
+-- Neue Tabelle für Multi-User OAuth Token Management
+create table if not exists platform_accounts (
+  id uuid primary key default gen_random_uuid(),
+  platform_id text not null references platforms(id),
+  account_name text,
+  access_token text not null,
+  refresh_token text,
+  token_expires_at timestamptz,
+  is_active boolean not null default true,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_platform_accounts_active
+on platform_accounts (platform_id, is_active)
+where is_active = true;
 
 create table if not exists temporary_uploads (
   id uuid primary key default gen_random_uuid(),
@@ -245,6 +274,8 @@ $$;
 ```txt
 app/
   page.tsx
+  layout.tsx
+  globals.css
   admin/page.tsx
   api/
     upload/route.ts
@@ -254,13 +285,22 @@ app/
     cron/cleanup-temp-uploads/route.ts
 lib/
   supabase/admin.ts
+  supabase/client.ts
+  auth/admin.ts
   ai/assembly.ts
   ai/embeddings.ts
-  jobs/handlers.ts
   platforms/types.ts
+  platforms/account.ts
+  platforms/utils.ts
   platforms/tiktok.ts
+  platforms/youtube.ts
+  platforms/linkedin.ts
+  platforms/instagram.ts
   platforms/index.ts
+  jobs/handlers.ts
+  jobs/queue.ts
 .env.example
+schema.sql
 ```
 
 ## AssemblyAI SDK Integration
@@ -313,25 +353,27 @@ export interface PlatformAdapter {
 }
 ```
 
-## TikTok Adapter Platzhalter
+## Plattform-Adapter
 
-```ts
-import type { PlatformAdapter } from './types';
+### TikTok
 
-export const tiktokAdapter: PlatformAdapter = {
-  platformId: 'tiktok',
+Voll implementiert. OAuth2 Refresh + Content Posting API (`PULL_FROM_URL`).
 
-  async publish(input) {
-    // TODO: TikTok Content Posting API integrieren.
-    // Erwartet wird:
-    // 1. Upload initialisieren
-    // 2. Video hochladen
-    // 3. Publish auslösen/status prüfen
-    // 4. platformPostId/platformUrl zurückgeben
+### YouTube
 
-    throw new Error('TikTok publishing is not implemented yet. Add TikTok Content Posting API credentials and implementation.');
-  },
-};
+Voll implementiert. Resumable Upload via Data API v3.
+
+### LinkedIn
+
+Voll implementiert. 3-Step Upload: `registerUpload` → PUT Bytes → `ugcPosts`.
+
+### Instagram
+
+⚠️ Experimental. Graph API Container-Flow mit Polling. Erfordert Business Account.
+
+### Alle Adapter
+Laden Credentials bevorzugt aus `platform_accounts` (DB) mit Fallback auf `.env.local`.
+Token-Rotation wird automatisch persistiert.
 ```
 
 ## Pipeline-Übersicht
@@ -378,11 +420,11 @@ job_type = publish_to_platform
 
 ### Cleanup
 
-Nach erfolgreicher Veröffentlichung auf allen geplanten Plattformen:
+Nach erfolgreicher Veröffentlichung auf **allen** geplanten Plattformen:
 
-```text
-job_type = cleanup_temp_upload
-```
+1. `publish_to_platform` prüft ob ALLE sibling `platform_posts` finished sind (`published`/`failed`/`cancelled`).
+2. Nur dann wird `cleanup_temp_upload` Job enqueued.
+3. Cleanup ist idempotent (`status === 'deleted'` wird übersprungen).
 
 ## Nächster Build-Schritt
 
