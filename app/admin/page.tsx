@@ -64,25 +64,15 @@ export default function AdminPage() {  const [secret, setSecret] = useState("");
 
     async function loadAccounts() {
       try {
-        const { data } = await getSupabaseClient()
-          .from("platform_accounts")
-          .select("id, platform_id, account_name, is_active, connected_at")
-          .eq("is_active", true)
-          .order("connected_at", { ascending: false });
-
-        if (data) {
-          setConnectedAccounts(
-            data as {
-              id: string;
-              platform_id: string;
-              account_name: string | null;
-              is_active: boolean;
-              connected_at: string;
-            }[]
-          );
-        }
+        const adminSecret = localStorage.getItem("cos_admin_secret") || "";
+        const res = await fetch("/api/admin/accounts", {
+          headers: { Authorization: `Bearer ${adminSecret}` },
+        });
+        if (!res.ok) throw new Error("Failed to load accounts");
+        const json = await res.json();
+        setConnectedAccounts(json.accounts || []);
       } catch {
-        // ignore — will just show no connected accounts
+        setConnectedAccounts([]);
       }
     }
 

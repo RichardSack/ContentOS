@@ -204,7 +204,7 @@ returns table (
   document_id uuid,
   similarity float
 )
-language sql stable
+language sql stable security definer
 as $$
   select
     ce.content_item_id,
@@ -217,3 +217,14 @@ as $$
   order by ce.embedding <=> query_embedding
   limit match_count;
 $$;
+
+-- ============================================
+-- RLS (Row-Level Security) Policies
+-- ============================================
+-- See migrations/002_rls.sql for the full DDL:
+--   - content_items: public SELECT only if visibility='public' AND processing_status='ready'
+--   - platforms: public SELECT only if is_active=true
+--   - content_embeddings / content_documents: NO direct access; search via match_content_items RPC
+--   - All other tables: service-role / admin only (RLS enabled, no public policies)
+-- match_content_items runs with SECURITY DEFINER so it can access embeddings
+-- even when the calling role has no direct table access.
