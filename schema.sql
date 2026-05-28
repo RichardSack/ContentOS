@@ -182,6 +182,19 @@ create trigger set_processing_jobs_updated_at
 before update on processing_jobs
 for each row execute function set_updated_at();
 
+-- ============================================
+-- OAuth Schema Additions (migrations/001_oauth.sql)
+-- ============================================
+-- Added: oauth_states table for CSRF protection
+-- Added: platform_accounts.user_id (nullable, for future multi-user)
+-- Added: platform_accounts.connected_at
+-- Added: RPC prune_expired_oauth_states()
+-- See migrations/001_oauth.sql for full DDL
+
+-- ============================================
+-- Vector Search RPC Function
+-- ============================================
+
 create or replace function match_content_items (
   query_embedding vector(1536),
   match_count int default 5

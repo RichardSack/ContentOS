@@ -9,6 +9,15 @@ export default function AdminPage() {
   const [message, setMessage] = useState("");
   const [platforms, setPlatforms] = useState<{ id: string; name: string }[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const [connectedAccounts, setConnectedAccounts] = useState<
+    {
+      id: string;
+      platform_id: string;
+      account_name: string | null;
+      is_active: boolean;
+      connected_at: string;
+    }[]
+  >([]);
 
   useEffect(() => {
     const saved = localStorage.getItem("cos_admin_secret");
@@ -27,7 +36,12 @@ export default function AdminPage() {
           setSelectedPlatforms(typed.map((p) => p.id));
         }
       } catch {
-        const fallback = [{ id: "tiktok", name: "TikTok" }];
+        const fallback = [
+          { id: "tiktok", name: "TikTok" },
+          { id: "youtube", name: "YouTube" },
+          { id: "linkedin", name: "LinkedIn" },
+          { id: "instagram", name: "Instagram" },
+        ];
         setPlatforms(fallback);
         setSelectedPlatforms(fallback.map((p) => p.id));
       }
@@ -36,15 +50,89 @@ export default function AdminPage() {
     loadPlatforms();
   }, []);
 
+  // Load connected accounts after login
+  useEffect(() => {
+    if (!isLoggedIn) return;
+
+    async function loadAccounts() {
+      try {
+        const { data } = await getSupabaseClient()
+          .from("platform_accounts")
+          .select("id, platform_id, account_name, is_active, connected_at")
+          .eq("is_active", true)
+          .order("connected_at", { ascending: false });
+
+        if (data) {
+          setConnectedAccounts(
+            data as {
+              id: string;
+              platform_id: string;
+              account_name: string | null;
+              is_active: boolean;
+              connected_at: string;
+            }[]
+          );
+        }
+      } catch {
+        // ignore — will just show no connected accounts
+      }
+    }
+
+    loadAccounts();
+
+    // Check URL for OAuth callback result
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("connected");
+    const error = params.get("error");
+    if (connected) setMessage(`✅ ${capitalize(connected)} verbunden!`);
+    if (error) setMessage(`❌ Fehler: ${decodeURIComponent(error)}`);
+    if (connected || error) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [isLoggedIn]);
+
+  function capitalize(s: string) {
+    return s[0]?.toUpperCase() + s.slice(1);
+  }
+
   function login() {
     localStorage.setItem("cos_admin_secret", secret);
     setIsLoggedIn(true);
     setSecret("");
   }
 
+  async function connectPlatform(platformId: string) {
+    window.location.href = `/api/auth/${platformId}`;
+  }
+
+  async function disconnectAccount(accountId: string) {
+    const adminSecret = localStorage.getItem("cos_admin_secret") || "";
+    try {
+      const res = await fetch("/api/admin/disconnect", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminSecret}`,
+        },
+        body: JSON.stringify({ accountId }),
+      });
+      if (!res.ok) throw new Error("Disconnect failed");
+      setConnectedAccounts((prev) => prev.filter((a) => a.id !== accountId));
+      setMessage("Account getrennt.");
+    } catch (err: any) {
+      setMessage(`Fehler: ${err.message}`);
+    }
+  }
+
   function togglePlatform(id: string) {
     setSelectedPlatforms((prev) =>
       prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  }
+
+  function isPlatformConnected(platformId: string) {
+    return connectedAccounts.some(
+      (a) => a.platform_id === platformId && a.is_active
     );
   }
 
@@ -55,6 +143,26 @@ export default function AdminPage() {
     if (selectedPlatforms.length === 0) {
       setMessage("Bitte mindestens eine Plattform auswählen.");
       return;
+    }
+
+    // Warn if uploading to unconnected platforms
+    const unconnected = selectedPlatforms.filter(
+      (pid) => !isPlatformConnected(pid)
+    );
+    if (unconnected.length > 0) {
+      const names = unconnected
+        .map((pid) => {
+          const plat = platforms.find((p) => p.id === pid);
+          return plat ? plat.name : pid;
+        })
+        .join(", ");
+      if (
+        !confirm(
+          `Diese Plattformen sind nicht verbunden und werden u. U. fehlschlagen: ${names}. Trotzdem fortfahren?`
+        )
+      ) {
+        return;
+      }
     }
 
     const form = e.currentTarget;
@@ -124,6 +232,54 @@ export default function AdminPage() {
         </div>
       )}
 
+      {/* OAuth Connections */}
+      <section className="mb-8">
+        <h2 className="text-lg font-semibold mb-3">Verknüpfte Plattformen</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {platforms.map((p) => {
+            const connected = isPlatformConnected(p.id);
+            const account = connectedAccounts.find(
+              (a) => a.platform_id === p.id && a.is_active
+            );
+            return (
+              <div
+                key={p.id}
+                className="flex items-center justify-between bg-surface-700 border border-surface-500 rounded-lg px-4 py-3"
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-block w-2 h-2 rounded-full ${
+                      connected ? "bg-emerald-400" : "bg-gray-500"
+                    }`}
+                  />
+                  <span className="text-sm">{p.name}</span>
+                  {account?.account_name && (
+                    <span className="text-xs text-gray-400">
+                      ({account.account_name})
+                    </span>
+                  )}
+                </div>
+                {connected ? (
+                  <button
+                    onClick={() => disconnectAccount(account!.id)}
+                    className="text-xs bg-red-900/40 hover:bg-red-900/60 text-red-300 border border-red-800/50 px-3 py-1 rounded transition"
+                  >
+                    Trennen
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => connectPlatform(p.id)}
+                    className="text-xs bg-surface-600 hover:bg-surface-500 text-white px-3 py-1 rounded transition"
+                  >
+                    Verbinden
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       <form onSubmit={handleSubmit} className="space-y-5">
         <div>
           <label className="block text-sm text-gray-400 mb-1">Video-Datei</label>
@@ -165,7 +321,9 @@ export default function AdminPage() {
         </div>
 
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Geplante Veröffentlichung (optional)</label>
+          <label className="block text-sm text-gray-400 mb-1">
+            Geplante Veröffentlichung (optional)
+          </label>
           <input
             name="scheduledAt"
             type="datetime-local"
