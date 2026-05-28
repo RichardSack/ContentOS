@@ -1,5 +1,6 @@
 import type { PlatformAdapter } from "./types";
 import { getActivePlatformAccount, persistTokens } from "./account";
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
 
 const TIKTOK_API_BASE = "https://open.tiktokapis.com";
 
@@ -17,7 +18,7 @@ async function refreshAccessToken(refreshToken?: string | null): Promise<{
     );
   }
 
-  const res = await fetch(`${TIKTOK_API_BASE}/v2/oauth/token/`, {
+  const res = await fetchWithTimeout(`${TIKTOK_API_BASE}/v2/oauth/token/`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -71,7 +72,7 @@ export const tiktokAdapter: PlatformAdapter = {
       }
     }
 
-    const res = await fetch(`${TIKTOK_API_BASE}/v2/post/publish/video/init/`, {
+    const res = await fetchWithTimeout(`${TIKTOK_API_BASE}/v2/post/publish/video/init/`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,

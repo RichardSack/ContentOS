@@ -1,5 +1,6 @@
 import type { PlatformAdapter } from "./types";
 import { getActivePlatformAccount, persistTokens } from "./account";
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
 
 const GRAPH_API_BASE = "https://graph.facebook.com/v18.0";
 
@@ -30,7 +31,7 @@ const GRAPH_API_BASE = "https://graph.facebook.com/v18.0";
  */
 
 function graphApiFetch(path: string, init?: RequestInit) {
-  return fetch(`${GRAPH_API_BASE}${path}`, init);
+  return fetchWithTimeout(`${GRAPH_API_BASE}${path}`, init);
 }
 
 async function graphApiPost(path: string, body: Record<string, unknown>) {

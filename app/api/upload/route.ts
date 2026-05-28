@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { assertAdmin } from "@/lib/auth/admin";
 import { enqueueJob } from "@/lib/jobs/queue";
+import { validateUpload } from "@/lib/upload/validate";
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,10 +25,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing file" }, { status: 400 });
   }
 
-  if (!file.type.startsWith("video/")) {
+  const validation = validateUpload(file);
+  if (!validation.ok) {
     return NextResponse.json(
-      { error: "File must be a video" },
-      { status: 400 }
+      { error: validation.error },
+      { status: validation.status }
     );
   }
 

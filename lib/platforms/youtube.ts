@@ -1,6 +1,7 @@
 import type { PlatformAdapter } from "./types";
 import { getActivePlatformAccount, persistTokens } from "./account";
 import { downloadVideo } from "./utils";
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
 
 const YOUTUBE_UPLOAD_BASE =
   "https://www.googleapis.com/upload/youtube/v3/videos";
@@ -19,7 +20,7 @@ async function getAccessToken(account: {
     );
   }
 
-  const res = await fetch(GOOGLE_OAUTH_BASE, {
+  const res = await fetchWithTimeout(GOOGLE_OAUTH_BASE, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -77,7 +78,7 @@ export const youtubeAdapter: PlatformAdapter = {
     }
 
     // 1. Initialize resumable upload session
-    const initRes = await fetch(
+    const initRes = await fetchWithTimeout(
       `${YOUTUBE_UPLOAD_BASE}?uploadType=resumable&part=snippet,status,contentDetails`,
       {
         method: "POST",
@@ -113,7 +114,7 @@ export const youtubeAdapter: PlatformAdapter = {
     }
 
     // 2. Upload video bytes
-    const uploadRes = await fetch(uploadUrl, {
+    const uploadRes = await fetchWithTimeout(uploadUrl, {
       method: "PUT",
       headers: {
         "Content-Type": contentType,

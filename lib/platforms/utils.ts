@@ -5,12 +5,14 @@
  * may fail here. For production with heavy files, consider chunked
  * download or a background worker with larger resource limits.
  */
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
+
 export async function downloadVideo(url: string): Promise<{
   buffer: ArrayBuffer;
   size: number;
   contentType: string;
 }> {
-  const res = await fetch(url, { method: "GET" });
+  const res = await fetchWithTimeout(url, { method: "GET" });
   if (!res.ok) {
     throw new Error(
       `Failed to download video from temporary URL: ${res.status} ${res.statusText}`

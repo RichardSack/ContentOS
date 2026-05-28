@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { validateState } from "@/lib/oauth/core";
 import { getOAuthConfig } from "@/lib/oauth/config";
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
 
 export async function GET(
   req: NextRequest,
@@ -61,7 +62,7 @@ export async function GET(
   const redirectUri = `${baseUrl}/api/auth`;
 
   try {
-    const tokenRes = await fetch(config.tokenUrl, {
+    const tokenRes = await fetchWithTimeout(config.tokenUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",

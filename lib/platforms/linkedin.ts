@@ -1,6 +1,7 @@
 import type { PlatformAdapter } from "./types";
 import { getActivePlatformAccount, persistTokens } from "./account";
 import { downloadVideo } from "./utils";
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
 
 const LINKEDIN_API_BASE = "https://api.linkedin.com/v2";
 const LINKEDIN_OAUTH_BASE = "https://www.linkedin.com/oauth/v2/accessToken";
@@ -18,7 +19,7 @@ async function refreshLinkedInToken(account: {
     );
   }
 
-  const res = await fetch(LINKEDIN_OAUTH_BASE, {
+  const res = await fetchWithTimeout(LINKEDIN_OAUTH_BASE, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -67,7 +68,7 @@ export const linkedinAdapter: PlatformAdapter = {
     }
 
     // 1. Register upload
-    const registerRes = await fetch(
+    const registerRes = await fetchWithTimeout(
       `${LINKEDIN_API_BASE}/assets?action=registerUpload`,
       {
         method: "POST",
@@ -125,7 +126,7 @@ export const linkedinAdapter: PlatformAdapter = {
     // 2. Download & upload bytes
     const { buffer } = await downloadVideo(input.temporaryUploadUrl);
 
-    const uploadRes = await fetch(uploadUrl, {
+    const uploadRes = await fetchWithTimeout(uploadUrl, {
       method: "PUT",
       headers: { "Content-Type": "application/octet-stream" },
       body: buffer,
@@ -137,7 +138,7 @@ export const linkedinAdapter: PlatformAdapter = {
     }
 
     // 3. Create UGC post with the video asset
-    const postRes = await fetch(`${LINKEDIN_API_BASE}/ugcPosts`, {
+    const postRes = await fetchWithTimeout(`${LINKEDIN_API_BASE}/ugcPosts`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
