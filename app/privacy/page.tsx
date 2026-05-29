@@ -110,7 +110,7 @@ export default function PrivacyPage() {
           For privacy-related questions or data requests, contact us at:
         </p>
         <p className="mt-2">
-          <strong>Email:</strong> privacy@contentos.app
+          <strong>Email:</strong> richard.h.a.sack+contentos@gmail.com
         </p>
       </section>
     </main>

@@ -147,7 +147,7 @@ export default function TermsPage() {
         <h2 className="text-xl font-semibold text-white mb-3">12. Contact</h2>
         <p>For questions about these terms, contact:</p>
         <p className="mt-2">
-          <strong>Email:</strong> legal@contentos.app
+          <strong>Email:</strong> richard.h.a.sack+contentos@gmail.com
         </p>
       </section>
     </main>
