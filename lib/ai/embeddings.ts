@@ -1,13 +1,21 @@
 import OpenAI from "openai";
 
-export const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+let _openai: OpenAI | null = null;
+
+function getOpenAI(): OpenAI {
+  if (_openai) return _openai;
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) {
+    throw new Error("OPENAI_API_KEY not set");
+  }
+  _openai = new OpenAI({ apiKey: key });
+  return _openai;
+}
 
 export const EMBEDDING_MODEL = "text-embedding-3-small";
 
 export async function createEmbedding(input: string) {
-  const response = await openai.embeddings.create({
+  const response = await getOpenAI().embeddings.create({
     model: EMBEDDING_MODEL,
     input,
   });
@@ -15,24 +23,20 @@ export async function createEmbedding(input: string) {
   return response.data[0].embedding;
 }
 
-export async function generateSummaryAndKeywords(transcript: string) {
-  const response = await openai.chat.completions.create({
+export async function generateSummaryAndKeywords(text: string) {
+  const response = await getOpenAI().chat.completions.create({
     model: "gpt-4o-mini",
-    temperature: 0.2,
     messages: [
       {
         role: "system",
         content:
-          "Du bist ein präziser Content-Analyst. Antworte ausschließlich als valides JSON.",
+          "Du bist ein deutscher Content-Editor. Erstelle eine kurze Zusammenfassung (max 200 Wörter) und 5-10 Keywords für ein Video. Antworte NUR im JSON-Format: {\"summary\":\"...\",\"keywords\":[\"...\",\"...\"]}.",
       },
-      {
-        role: "user",
-        content: `Analysiere dieses deutschsprachige Kurzvideo-Transkript und gib JSON zurück mit summary:string und keywords:string[].\n\nTranskript:\n${transcript}`,
-      },
+      { role: "user", content: text },
     ],
     response_format: { type: "json_object" },
   });
 
   const content = response.choices[0].message.content || "{}";
-  return JSON.parse(content) as { summary?: string; keywords?: string[] };
+  return JSON.parse(content) as { summary: string; keywords: string[] };
 }
