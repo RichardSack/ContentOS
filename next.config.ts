@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // No output: 'standalone' needed — Vercel handles this automatically
 };
 
 export default nextConfig;
